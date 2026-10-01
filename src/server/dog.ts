@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { DESK_BY_ID, FLOOR, type DeskDef } from '../shared/layout.js';
-import { cleanDogName, dogAt, dogDefaults, legSeconds, type DogAct, type DogState } from '../shared/dog.js';
+import { DESK_BY_ID, FLOOR, KIOSK, type DeskDef } from '../shared/layout.js';
+import { cleanDogName, dogAt, dogDefaults, legSeconds, type DogAct, type DogBreed, type DogState } from '../shared/dog.js';
 import { deskPoint, nearestWalkable, route, walkable, type Pt } from '../shared/nav.js';
 import type { PeerInfo, WorkerInfo } from '../shared/protocol.js';
 
@@ -40,19 +40,22 @@ export interface DogEnv {
   people(): PeerInfo[];
   /** To everyone on this floor. */
   send(dog: DogState): void;
+  /** How many rows the floor's back office is built out, for getting round its desks too (see WING). */
+  wing?(): number;
 }
 
-type Leg = Omit<DogState, 'name' | 'coat' | 'elapsed'> & { start: number };
+type Leg = Omit<DogState, 'name' | 'coat' | 'breed' | 'elapsed'> & { start: number };
 
 /**
  * A floor's dog. It naps under the desks of workers who are busy, trots after people for a while,
  * sniffs around and hangs out on the lounge rug. When a worker needs input it drops everything, runs
- * to that desk and barks (the browsers do the barking; see client/world/dog.ts). Its name is kept
- * in the floor's .agent-office/dog.json.
+ * to that desk and barks (the browsers do the barking; see client/features/dog/world.ts). Its name is kept
+ * in the floor's .agent-office/dog.json; its coat and breed come from the floor's id (see dogDefaults).
  */
 export class Dog {
   private name: string;
   private readonly coat: number;
+  private readonly breed: DogBreed;
   private readonly fallbackName: string;
   private readonly file: string;
   private leg: Leg;
@@ -76,6 +79,7 @@ export class Dog {
     const d = dogDefaults(floorId);
     this.fallbackName = d.name;
     this.coat = d.coat;
+    this.breed = d.breed;
     this.file = path.join(dataDir, 'dog.json');
     this.name = this.load() ?? d.name;
     // Lying on the rug when the office opens, and up and about a few seconds later.
@@ -86,7 +90,7 @@ export class Dog {
 
   view(): DogState {
     const { start, ...leg } = this.leg;
-    return { name: this.name, coat: this.coat, ...leg, elapsed: Date.now() - start };
+    return { name: this.name, coat: this.coat, breed: this.breed, ...leg, elapsed: Date.now() - start };
   }
 
   /** Where it is right now. */
@@ -191,12 +195,12 @@ export class Dog {
     const pts: Pt[] = [from];
     let start = from;
     // Still under the desk (or on its way in), not just somewhere on the way there.
-    if (this.exit && !walkable(from[0], from[1])) {
+    if (this.exit && !walkable(from[0], from[1], this.wing)) {
       pts.push(this.exit);
       start = this.exit;
     }
     this.exit = undefined;
-    pts.push(...route(start, to).slice(1));
+    pts.push(...route(start, to, this.wing).slice(1));
     if (last) pts.push(last);
     this.go(pts, speed, act, extra);
     return legSeconds(this.leg) * 1000;
@@ -221,13 +225,19 @@ export class Dog {
     return best;
   }
 
+  /** How far the floor's back office is built out. */
+  private get wing(): number {
+    return this.env.wing?.() ?? 0;
+  }
+
   /** Picks what to do next. */
   private think() {
     if (this.stopped) return;
     this.waking = false;
     const call = this.nextCall();
     if (call) return this.barkAt(call);
-    const busy = this.env.workers().filter((w) => w.status === 'working' && DESK_BY_ID.has(w.deskId));
+    // Only at a desk or a bean bag: a board agent's kiosk has nothing to curl up under.
+    const busy = this.env.workers().filter((w) => w.status === 'working' && DESK_BY_ID.has(w.deskId) && !DESK_BY_ID.get(w.deskId)?.station);
     const people = this.env.people().filter((p) => p.y < 0.5);
     const was = this.mode;
     const options: [number, () => void][] = [
@@ -259,7 +269,7 @@ export class Dog {
     let spot: Pt = at;
     for (let i = 0; i < 30; i++) {
       const p: Pt = [rand(FLOOR.minX + 1, FLOOR.maxX - 1), rand(FLOOR.minZ + 1, FLOOR.maxZ - 1)];
-      if (walkable(p[0], p[1]) && dist(p, at) > 4) {
+      if (walkable(p[0], p[1], this.wing) && dist(p, at) > 4) {
         spot = p;
         break;
       }
@@ -274,7 +284,7 @@ export class Dog {
     this.mode = 'nap';
     let side = this.sideOf(desk);
     // A bean bag has no desk to get under, so it curls up beside it, on whichever side has room.
-    if (desk.beanbag && !walkable(...deskPoint(desk, side * 1.05, 0.1))) side = -side;
+    if (desk.beanbag && !walkable(...deskPoint(desk, side * 1.05, 0.1), this.wing)) side = -side;
     const approach = desk.beanbag ? deskPoint(desk, side * 1.3, 1.2) : deskPoint(desk, side * 0.8, 1.3);
     const under = desk.beanbag ? deskPoint(desk, side * 1.05, 0.1) : deskPoint(desk, side * 0.45, 0.15);
     // Head out toward the chair.
@@ -299,7 +309,7 @@ export class Dog {
       return this.think();
     }
     const person: Pt = [p.x, p.z];
-    const behind = nearestWalkable([p.x - Math.sin(p.rotY) * 1.1, p.z - Math.cos(p.rotY) * 1.1]);
+    const behind = nearestWalkable([p.x - Math.sin(p.rotY) * 1.1, p.z - Math.cos(p.rotY) * 1.1], this.wing);
     const end = this.leg.path[this.leg.path.length - 1];
     const along = this.leg.act === 'sit' && this.leg.following === p.id;
     // Someone standing still who just turns around doesn't need it circling round behind them.
@@ -320,8 +330,9 @@ export class Dog {
     this.follow = undefined;
     if (!already) {
       const side = this.sideOf(desk);
-      const spot = deskPoint(desk, side * 0.75, 1.45);
-      this.walkTo(spot, RUN, 'bark', { workerId: w.id, face: toward(spot, deskPoint(desk, 0, 0.9)) });
+      // At a board agent, out in front of its kiosk, looking up at the agent behind it.
+      const spot = desk.station ? deskPoint(desk, side * 0.6, -1.1) : deskPoint(desk, side * 0.75, 1.45);
+      this.walkTo(spot, RUN, 'bark', { workerId: w.id, face: toward(spot, deskPoint(desk, 0, desk.station ? KIOSK.stand : 0.9)) });
     }
     // Checks now and then that it's still the one to bark at.
     this.wake(5000);
@@ -330,6 +341,7 @@ export class Dog {
   /** Which end of a desk (-1 or +1 along its width) is nearer. */
   private sideOf(desk: DeskDef): number {
     const at = this.here();
-    return dist(at, deskPoint(desk, 1, 1.3)) <= dist(at, deskPoint(desk, -1, 1.3)) ? 1 : -1;
+    const s = desk.station ? -1.1 : 1.3;
+    return dist(at, deskPoint(desk, 1, s)) <= dist(at, deskPoint(desk, -1, s)) ? 1 : -1;
   }
 }

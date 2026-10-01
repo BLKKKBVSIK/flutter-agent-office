@@ -1,3 +1,4 @@
+import './markdown.css';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { h } from './dom';
@@ -7,6 +8,7 @@ import { h } from './dom';
 
 // In issue and PR comments GitHub turns a single newline into a line break, unlike in .md files.
 const md = new Marked({ gfm: true, breaks: true });
+const mdFile = new Marked({ gfm: true });
 
 const purify = DOMPurify(window);
 purify.addHook('afterSanitizeAttributes', (node) => {
@@ -86,9 +88,14 @@ function absolutize(root: HTMLElement, itemUrl: string, repoUrl: string) {
   for (const img of root.querySelectorAll('img[src]')) img.setAttribute('src', fix(img.getAttribute('src') ?? '', false));
 }
 
+/** Marked's HTML, sanitized, as nodes to put on the page. */
+function sanitized(html: string): DocumentFragment {
+  return purify.sanitize(html, { RETURN_DOM_FRAGMENT: true, FORBID_TAGS: ['style', 'form', 'button', 'select', 'textarea'], FORBID_ATTR: ['style'] });
+}
+
 /**
  * Renders markdown into a `.md` block. `itemUrl` (the issue or PR on GitHub) anchors its links;
- * `refs: false` leaves #123 and @name alone (text that isn't from GitHub).
+ * `refs: false` leaves #123 and @name alone (text that isn't from GitHub, like a Notion page).
  */
 export function markdown(src: string, itemUrl?: string, opts: { refs?: boolean } = {}): HTMLElement {
   const el = h('div.md');
@@ -96,8 +103,7 @@ export function markdown(src: string, itemUrl?: string, opts: { refs?: boolean }
     el.append(h('p.none', {}, 'No description provided.'));
     return el;
   }
-  const html = md.parse(src, { async: false }) as string;
-  el.append(purify.sanitize(html, { RETURN_DOM_FRAGMENT: true, FORBID_TAGS: ['style', 'form', 'button', 'select', 'textarea'], FORBID_ATTR: ['style'] }));
+  el.append(sanitized(md.parse(src, { async: false }) as string));
   const repoUrl = itemUrl ? repoUrlOf(itemUrl) : undefined;
   if (itemUrl && repoUrl) absolutize(el, itemUrl, repoUrl);
   alerts(el);
@@ -105,38 +111,16 @@ export function markdown(src: string, itemUrl?: string, opts: { refs?: boolean }
   return el;
 }
 
-const NOTION_LAYOUT_RE = /^<\/?columns?\b[^>]*>$/;
-const NOTION_MEDIA_RE = /<(video|audio|file|pdf)\s+src="([^"]+)"[^>]*?(?:\/>|>(.*?)<\/\1>)/g;
-
 /**
- * Notion's markdown (GET /v1/pages/:id/markdown) as plain markdown: columns flattened into the page
- * (their content is indented under them, which would read as code), empty blocks as blank lines,
- * videos and sound as players, other files as links.
+ * Renders a Markdown file from the project into a `.md` block, the way GitHub shows it in the repo:
+ * a lone newline is only a space, and #123 is just text. Its links and pictures are left as written,
+ * for the bookshelf to point at the project (see features/bookshelf/ui.ts).
  */
-export function fromNotion(src: string): string {
-  const out: string[] = [];
-  let depth = 0;
-  for (const line of src.split('\n')) {
-    const t = line.trim();
-    if (NOTION_LAYOUT_RE.test(t)) {
-      depth = Math.max(0, depth + (t.startsWith('</') ? -1 : 1));
-      out.push('');
-      continue;
-    }
-    if (t === '<empty-block/>') {
-      out.push('');
-      continue;
-    }
-    const l = depth ? line.replace(new RegExp(`^\\t{0,${depth}}`), '') : line;
-    out.push(
-      l.replace(NOTION_MEDIA_RE, (_, tag: string, url: string, caption?: string) => {
-        if (tag === 'video' || tag === 'audio') return `<${tag} src="${url}"></${tag}>`;
-        const name = caption?.trim() || decodeURIComponent(url.split('?')[0].split('/').pop() ?? '') || 'file';
-        return `[📎 ${name}](${url})`;
-      }),
-    );
-  }
-  return out.join('\n');
+export function markdownFile(src: string): HTMLElement {
+  const el = h('div.md');
+  el.append(sanitized(mdFile.parse(src, { async: false }) as string));
+  alerts(el);
+  return el;
 }
 
 /** https://github.com/owner/repo from an issue or PR URL. */

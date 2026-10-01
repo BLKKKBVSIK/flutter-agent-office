@@ -1,47 +1,9 @@
 import * as THREE from 'three';
-import { NOTION_BOARD, WALL_HEIGHT } from '../../../shared/layout';
-import { wallFacing } from '../../../shared/decor';
 import { NOTION_INKS, type NotionState } from '../../../shared/protocol';
-import { textPlane } from '../../world/toon';
-import type { Interactable } from '../../world/types';
-import type { Fixture } from '../../world/office/fixture';
-import { PALETTE } from '../../world/office/materials';
-import { wallBoard } from '../../world/office/props';
 import { NOTE_COLORS, PINS, clip, wrap } from '../boards/world';
 
-// The 🗂️ Notion board: a cork board in the north-west corner with a sticky note for each Notion task
-// assigned to you that isn't done yet, the ones under way first.
-
-declare module '../../world/types' {
-  interface OfficeHandles {
-    /** The Notion board's face, for its texture (see NotionBoardTexture). */
-    notionBoard: THREE.Mesh;
-  }
-}
-
-/** The board on the wall, its label over it, and E to open it. */
-export const notionBoard: Fixture<'notionBoard'> = (site) => {
-  const b = NOTION_BOARD;
-  // Out from the wall, the way the board faces.
-  const nx = Math.sin(b.rotY);
-  const nz = Math.cos(b.rotY);
-  const { group, face } = wallBoard(b.width, b.height, PALETTE.wood);
-  group.position.set(b.x + nx * 0.08, b.y, b.z + nz * 0.08);
-  group.rotation.y = b.rotY;
-  site.group.add(group);
-  const label = textPlane('🗂️ Notion', { bg: '#fffaf3', size: 64 });
-  label.scale.multiplyScalar(1.3);
-  label.position.set(b.x + nx * 0.04, b.y + b.height / 2 + 0.5, b.z + nz * 0.04);
-  label.rotation.y = b.rotY;
-  site.group.add(label);
-  const it: Interactable = { kind: 'notion', x: b.x + nx * 1.6, z: b.z + nz * 1.6, radius: 2.4 };
-  site.interactables.push(it);
-  group.userData.interact = it;
-  // The board and its label above it, up to the ceiling.
-  const bottom = b.y - (b.height + 0.3) / 2;
-  site.wall(wallFacing(b.rotY), b.z, (bottom + WALL_HEIGHT) / 2, b.width + 0.3, WALL_HEIGHT - bottom);
-  return { handle: { notionBoard: face } };
-};
+// The 🗂️ Notion board: the cork board on the north wall where the issues board was, with a sticky
+// note for each Notion task assigned to you that isn't done yet, the ones under way first.
 
 /** A number from a string, to seed a note's color and tilt with, so a note keeps them between redraws. */
 function hash(s: string): number {
@@ -50,14 +12,14 @@ function hash(s: string): number {
   return Math.abs(x);
 }
 
-/** The Notion board's cork and notes, drawn onto a canvas in the board's proportions. */
+/** The Notion board's cork and notes, drawn onto a canvas (the issues board's, 2:1). */
 export class NotionBoardTexture {
   readonly texture: THREE.CanvasTexture;
   private canvas = document.createElement('canvas');
   private ctx: CanvasRenderingContext2D;
 
   constructor() {
-    this.canvas.width = Math.round((600 * NOTION_BOARD.width) / NOTION_BOARD.height);
+    this.canvas.width = 1200;
     this.canvas.height = 600;
     this.ctx = this.canvas.getContext('2d')!;
     this.texture = new THREE.CanvasTexture(this.canvas);
@@ -89,7 +51,7 @@ export class NotionBoardTexture {
               ? `No open tasks for you in ${state.project.name} 🎉`
               : 'No open tasks for you 🎉';
       g.font = '800 40px Nunito, ui-rounded, system-ui, sans-serif';
-      const boxW = W - 60;
+      const boxW = Math.min(840, W - 60);
       const lines = wrap(g, empty.replace(/`/g, ''), boxW - 80, 5);
       const boxH = 60 + lines.length * 50;
       g.fillStyle = '#fffaf3';
@@ -104,11 +66,11 @@ export class NotionBoardTexture {
       return;
     }
     // Fewer notes -> bigger notes, so a quiet board is still readable from across the room.
-    const n = Math.min(open.length, 6);
-    const cols = n <= 2 ? 1 : 2;
-    const rows = Math.ceil(n / cols);
-    const nw = (W - 40) / cols - 30;
-    const nh = Math.min(260, (H - 40) / rows - 30);
+    const n = Math.min(open.length, 15);
+    const cols = n <= 2 ? n : n <= 4 ? 2 : n <= 6 ? 3 : n <= 8 ? 4 : 5;
+    const rows = Math.min(3, Math.ceil(n / cols));
+    const nw = Math.min(416, (W - 40) / cols - 30);
+    const nh = Math.min(328, (H - 40) / rows - 30);
     const gx = (W - cols * nw) / (cols + 1);
     const gy = (H - rows * nh) / (rows + 1);
     open.slice(0, cols * rows).forEach((t, i) => {

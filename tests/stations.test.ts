@@ -31,10 +31,10 @@ test('the queue agent only ever queues work, however small, and says what it que
   assert.doesNotMatch(brief, /unless the person asks you for something else/);
 });
 
-test('the issues and PR agents keep their jobs, and may still be asked for something else', () => {
+test('the Notion and PR agents keep their jobs, and may still be asked for something else', () => {
   const issues = stationBrief('issues');
-  assert.match(issues, /Issues agent/);
-  assert.match(issues, /GitHub issues with the gh CLI/);
+  assert.match(issues, /Notion agent/);
+  assert.match(issues, /tasks in Notion with the ntn CLI/);
   const pulls = stationBrief('pulls');
   assert.match(pulls, /PR agent/);
   assert.match(pulls, /gh pr diff/);

@@ -145,7 +145,7 @@ export type StationKind = 'issues' | 'pulls' | 'queue';
  */
 export const STATIONS: DeskDef[] = [
   // Between the plant in the north-west corner and the Issues board.
-  { id: 'station-issues', station: 'issues', x: -15.6, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'Issues board' },
+  { id: 'station-issues', station: 'issues', x: -15.6, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'Notion board' },
   // Between the task queue and the PR board.
   { id: 'station-pulls', station: 'pulls', x: 0, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'PR board' },
   // Between the Issues board and the task queue.
@@ -155,7 +155,7 @@ export const STATIONS: DeskDef[] = [
 export const KIOSK = { width: 0.8, depth: 0.5, height: 0.55, stand: 0.55 } as const;
 /** Each board agent's name and its color, the same whenever it's hired. */
 export const STATION_AGENT: Record<StationKind, { name: string; color: string }> = {
-  issues: { name: 'Issues agent', color: '#ef476f' },
+  issues: { name: 'Notion agent', color: '#ef476f' },
   pulls: { name: 'PR agent', color: '#118ab2' },
   queue: { name: 'Queue agent', color: '#06d6a0' },
 };
@@ -240,7 +240,7 @@ export const BOARDS = {
   // Side by side along the north wall, the way work goes: an issue goes on the task queue (the
   // whiteboard in the middle), and its worker's pull request comes out the other side. Each has its
   // board agent's kiosk just west of it (see STATIONS).
-  issues: { x: -11.7, y: 2.1, z: FLOOR.minZ + 0.08, rotY: 0, width: 6, height: 3, label: 'Issues' },
+  issues: { x: -11.7, y: 2.1, z: FLOOR.minZ + 0.08, rotY: 0, width: 6, height: 3, label: '🗂️ Notion' },
   queue: { x: -3.9, y: 2.1, z: FLOOR.minZ + 0.08, rotY: 0, width: 6, height: 3, label: '📋 Task queue' },
   pulls: { x: 3.9, y: 2.1, z: FLOOR.minZ + 0.08, rotY: 0, width: 6, height: 3, label: 'Pull Requests' },
   // East wall, north of the lounge TV.
@@ -255,11 +255,6 @@ export const TV = { x: FLOOR.maxX - 0.1, y: 2.2, z: 0, width: 6.4, height: 3.6 }
  * workers it runs of the most it takes.
  */
 export const MACHINE_MONITOR = { x: FLOOR.minX, y: 2.2, z: -6, width: 2.3, height: 1.3 } as const;
-/**
- * The 🗂️ Notion board, on the west wall in the north-west corner, north of the first window and
- * facing into the room (+x): the Notion tasks assigned to the office's `ntn` login.
- */
-export const NOTION_BOARD = { x: FLOOR.minX + 0.08, y: 2.2, z: -11.7, rotY: Math.PI / 2, width: 2.3, height: 2.1 } as const;
 /** The lounge jukebox, against the east wall south of the TV, facing into the room. `y` is its speaker. */
 export const JUKEBOX = { x: FLOOR.maxX - 0.42, y: 0.75, z: 5.4, width: 1.3, depth: 0.72, height: 1.85 } as const;
 /** The arcade cabinet, against the east wall between the jukebox and the loft, facing into the room. `width` runs along the wall. */
@@ -279,8 +274,7 @@ export const GONG = { x: 11.8, z: FLOOR.minZ + 0.75, width: 1.9, height: 2.45 } 
 
 /** Potted plants around the room: where each stands, and how big it is. */
 export const PLANTS: readonly (readonly [x: number, z: number, scale: number])[] = [
-  // Under the first window on the west wall: the north-west corner has the Notion board.
-  [-17.2, -9, 1.3],
+  [-17.2, -12.2, 1.4],
   [17.2, -12.2, 1.5],
   [17.2, 12.2, 1.3],
   [-17.2, 8.5, 1.2],

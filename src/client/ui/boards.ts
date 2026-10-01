@@ -13,8 +13,8 @@ export interface BoardActions {
   ask(context: string, title: string): void;
   /** Walks you to the desk a pull request came from. */
   goToDesk(deskId: string): void;
-  /** Put an issue on the 📋 task queue; a worker is seated for it when there's room. */
-  queue(prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string): void;
+  /** Put an issue (or any task) on the 📋 task queue; a worker is seated for it when there's room. */
+  queue(prompt: string, title: string, issue?: number, provider?: AgentProvider, model?: string): void;
 }
 
 /** The task a worker gets for an issue, from the board or the queue. */
@@ -74,11 +74,12 @@ function queueChip(issue: number): Node | '' {
   return t.pr ? h('span.qchip.done', {}, `🔀 PR #${t.pr.number}${provider}`) : '';
 }
 
-function card(n: number, title: string, meta: (Node | string)[], i: number, onclick: () => void) {
+/** A sticky note in a board's column; `seed` picks its tilt and color. */
+export function card(seed: number, head: string, title: string, meta: (Node | string)[], i: number, onclick: () => void) {
   return h(
     'li.card',
-    { style: `--tilt:${TILTS[n % TILTS.length]};background:${NOTE_COLORS[n % NOTE_COLORS.length]};--pin:${['#ef476f', '#118ab2', '#06d6a0', '#ffd166'][i % 4]}`, tabindex: 0, onclick, onkeydown: ((e: KeyboardEvent) => e.key === 'Enter' && onclick()) as EventListener },
-    h('div.num', {}, `#${n}`),
+    { style: `--tilt:${TILTS[seed % TILTS.length]};background:${NOTE_COLORS[seed % NOTE_COLORS.length]};--pin:${['#ef476f', '#118ab2', '#06d6a0', '#ffd166'][i % 4]}`, tabindex: 0, onclick, onkeydown: ((e: KeyboardEvent) => e.key === 'Enter' && onclick()) as EventListener },
+    h('div.num', {}, head),
     h('div.ttl', {}, title),
     h('div.meta', {}, ...meta.filter((m) => m !== '').map((m) => (typeof m === 'string' ? h('span', {}, m) : m))),
   );
@@ -107,7 +108,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
         const ul = h('ul');
         col.items.forEach((it, i) =>
           ul.append(
-            card(it.number, it.title, [...labelChips(it.labels), queueChip(it.number), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions)),
+            card(it.number, `#${it.number}`, it.title, [...labelChips(it.labels), queueChip(it.number), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions)),
           ),
         );
         if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
@@ -121,6 +122,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
           ul.append(
             card(
               it.number,
+              `#${it.number}`,
               it.title,
               [
                 w ? deskChip(w) : '',

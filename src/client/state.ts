@@ -1,4 +1,4 @@
-import type { AccountsState, ChatLine, FloorInfo, FloorView, GhIssue, GhPull, GhState, NotifyState, PeerInfo, PlanLimits, Me, ProjectInfo, QueueState, QueueTask, RepoChoice, ServerMsg, ServicesState, SkyState, TeamState, UpgradeState, Usage, UsageState, WorkerInfo } from '../shared/protocol';
+import type { AccountsState, ChatLine, FloorInfo, FloorView, GhIssue, GhPull, GhState, NotionDatabaseChoice, NotionProjectChoice, NotionState, NotifyState, PeerInfo, PlanLimits, Me, ProjectInfo, QueueState, QueueTask, RepoChoice, ServerMsg, ServicesState, SkyState, TeamState, UpgradeState, Usage, UsageState, WorkerInfo } from '../shared/protocol';
 import type { ScreenState } from './world/laptop';
 import { randomLook, sanitizeLook, type Look } from '../shared/avatar';
 import type { Decoration } from '../shared/decor';
@@ -6,7 +6,7 @@ import { newer, type WbElement } from '../shared/whiteboard';
 import type { DogState } from '../shared/dog';
 import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'floors' | 'floor' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'whiteboard' | 'drawing';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'notion' | 'notionDatabases' | 'notionProjects' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'floors' | 'floor' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'whiteboard' | 'drawing';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -120,6 +120,11 @@ class Store {
   repos: { list: RepoChoice[]; error?: string; loading: boolean; at: number } = { list: [], loading: false, at: 0 };
   issues: GhState<GhIssue> = { items: [], fetchedAt: 0, loading: true };
   pulls: GhState<GhPull> = { items: [], fetchedAt: 0, loading: true };
+  /** The floor's 🗂️ Notion board. */
+  notion: NotionState = { items: [], fetchedAt: 0, loading: true };
+  /** Databases that could hold the tasks, and the projects they link to, once asked for. */
+  notionDatabases: { list: NotionDatabaseChoice[]; error?: string; loading: boolean; at: number } = { list: [], loading: false, at: 0 };
+  notionProjects: { list: NotionProjectChoice[]; error?: string; loading: boolean; at: number } = { list: [], loading: false, at: 0 };
   ice: RTCIceServer[] = [];
   chat: ChatLine[] = [];
   /** Whether this office can invite teammates (deployed with deploy/aws.sh). */
@@ -206,6 +211,7 @@ class Store {
     this.screens.clear(); // fresh full frames follow
     this.issues = v.issues;
     this.pulls = v.pulls;
+    this.notion = v.notion;
     this.queue = v.queue;
     this.decor = v.decor;
     this.services = v.services;
@@ -213,7 +219,7 @@ class Store {
     this.drawing = v.whiteboard.people;
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing'] as Topic[]) this.emit(t);
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'notion', 'queue', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing'] as Topic[]) this.emit(t);
   }
 
   private setDog(dog: DogState | null) {
@@ -297,6 +303,22 @@ class Store {
       case 'gh.issues':
         this.issues = msg.state;
         this.emit('issues');
+        break;
+      case 'notion.tasks': {
+        const was = this.notion.database?.id;
+        this.notion = msg.state;
+        // Another database links to other projects.
+        if (was !== msg.state.database?.id) this.notionProjects = { list: [], loading: false, at: 0 };
+        this.emit('notion');
+        break;
+      }
+      case 'notion.databases':
+        this.notionDatabases = { list: msg.databases, error: msg.error, loading: false, at: Date.now() };
+        this.emit('notionDatabases');
+        break;
+      case 'notion.projects':
+        this.notionProjects = { list: msg.projects, error: msg.error, loading: false, at: Date.now() };
+        this.emit('notionProjects');
         break;
       case 'gh.pulls':
         this.pulls = msg.state;

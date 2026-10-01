@@ -31,6 +31,7 @@ import { elevatorSpot, seatAt } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
+import { Notion, notionId, notionRef } from './notion.js';
 import { lookFromSeed, sanitizeLook } from '../shared/avatar.js';
 
 const MIME: Record<string, string> = {
@@ -148,6 +149,8 @@ const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const TOO_MANY_ATTEMPTS = 'Too many attempts. Try again in a few minutes.';
 /** WebSocket close code for a session that stopped counting: the account was revoked, or the shared password switched off. */
 const SIGNED_OUT = 4001;
+const NOTION_REFRESH_MS = 90_000;
+const NOTION_IDLE_REFRESH_MS = 10 * 60_000;
 /** The most chat lines, and lines per worker's terminal, a search answers with. */
 const SEARCH_CHAT_HITS = 50;
 const SEARCH_TERMINAL_HITS = 25;
@@ -201,9 +204,14 @@ export async function startServer(cfg: Config) {
   const toastFloor = (floor: Floor | undefined, text: string, level: ToastLevel = 'info') => {
     if (floor) toFloor(floor, { t: 'toast', text, level });
   };
+  // The 🗂️ Notion board: one fetch of the tasks for the building, each floor shown its project's.
+  const notion = new Notion(cfg.dataDir, () => {
+    for (const f of floors.values()) toFloor(f, { t: 'notion.tasks', state: notion.view(f.def.notionProject) });
+  });
+  const notionToFloor = (floor: Floor) => toFloor(floor, { t: 'notion.tasks', state: notion.view(floor.def.notionProject) });
   const floorInfos = (): FloorInfo[] => [
     ...[...floors.values()].map((f) => f.info()),
-    ...building.pending().map((d) => ({ id: d.id, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, cloning: true, workers: 0, busy: 0, waiting: 0, people: 0 })),
+    ...building.pending().map((d) => ({ id: d.id, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, notionProject: d.notionProject, cloning: true, workers: 0, busy: 0, waiting: 0, people: 0 })),
   ];
   // The elevator's counts change with every worker update; tell everyone at most a few times a second.
   let floorsSent = '';
@@ -386,6 +394,7 @@ export async function startServer(cfg: Config) {
     workers: floor?.workers.list() ?? [],
     issues: floor?.github.issues ?? { items: [], fetchedAt: 0, loading: false },
     pulls: floor?.github.pulls ?? { items: [], fetchedAt: 0, loading: false },
+    notion: notion.view(floor?.def.notionProject),
     queue: floor?.queue.state() ?? { tasks: [], maxWorkers: 0 },
     decor: floor?.decor.list() ?? [],
     services: servicesState(floor),
@@ -603,6 +612,17 @@ export async function startServer(cfg: Config) {
         return error ? send(res, 400, { error }) : send(res, 200, { ok: true });
       }
       if (p === '/api/search' && req.method === 'GET') return send(res, 200, search(url.searchParams.get('q') ?? '', floor));
+      if (p === '/api/notion/task' && req.method === 'GET') {
+        // What the Notion task window shows beyond the board card (see notion.ts).
+        const id = notionId(url.searchParams.get('id'));
+        if (!id) return send(res, 400, { error: 'Bad id' });
+        try {
+          const detail = await notion.taskDetail(id);
+          return detail ? send(res, 200, detail) : send(res, 404, { error: "That task isn't on the Notion board" });
+        } catch (err) {
+          return send(res, 502, { error: (err as Error).message });
+        }
+      }
       if (p.startsWith('/api/gh/') && req.method === 'GET') {
         // What the issue and PR windows show beyond the board cards (see github.ts).
         const n = Number(url.searchParams.get('number'));
@@ -755,6 +775,7 @@ export async function startServer(cfg: Config) {
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
     floorsChanged();
+    if (Date.now() - notion.tasks.fetchedAt > NOTION_REFRESH_MS) void notion.refresh();
     if (floor) {
       floor.arrived();
       // Anyone whose process ended since (exited, or failed to resume) gets up as you walk in.
@@ -916,10 +937,15 @@ export async function startServer(cfg: Config) {
       case 'floor.add': {
         const repo = str(msg.repo, 200);
         void building
-          .add(repo, who, (def) => {
-            floorsChanged();
-            toastAll(`🛗 ${who} is adding a floor for ${def.repo ?? def.name}…`);
-          })
+          .add(
+            repo,
+            who,
+            (def) => {
+              floorsChanged();
+              toastAll(`🛗 ${who} is adding a floor for ${def.repo ?? def.name}…`);
+            },
+            notionRef(msg.notionProject),
+          )
           .then((r) => {
             floorsChanged();
             if (typeof r === 'string') return sendTo(c, { t: 'floor.added', repo, error: r });
@@ -1024,6 +1050,42 @@ export async function startServer(cfg: Config) {
       case 'term.resize':
         if (c.attached.has(msg.workerId)) workerFloor(msg.workerId)?.workers.resize(msg.workerId, num(msg.cols), num(msg.rows));
         break;
+      case 'notion.refresh':
+        void notion.refresh();
+        break;
+      case 'notion.databases':
+        void notion.databases().then(
+          (databases) => sendTo(c, { t: 'notion.databases', databases }),
+          (err: Error) => sendTo(c, { t: 'notion.databases', databases: [], error: `Couldn't list your Notion databases: ${err.message}` }),
+        );
+        break;
+      case 'notion.database': {
+        const id = notionId(msg.id);
+        if (!id) break;
+        void notion.setDatabase(id).then((error) => {
+          if (error) return warn(c, error);
+          console.log(`  ${who} set the Notion board to ${notion.database?.name} (${id})`);
+          toastAll(`🗂️ ${who} pointed the Notion boards at ${notion.database?.name}`);
+        });
+        break;
+      }
+      case 'notion.projects':
+        void notion.projects(msg.refresh === true).then(
+          (projects) => sendTo(c, { t: 'notion.projects', projects }),
+          (err: Error) => sendTo(c, { t: 'notion.projects', projects: [], error: `Couldn't list the Notion projects: ${err.message}` }),
+        );
+        break;
+      case 'notion.project': {
+        const floor = here();
+        if (!floor) break;
+        const project = msg.project === null ? undefined : notionRef(msg.project);
+        if (msg.project !== null && !project) break;
+        if (!building.setNotionProject(floor.id, project)) break;
+        notionToFloor(floor);
+        floorsChanged();
+        toastFloor(floor, project ? `🗂️ ${who} set this floor's Notion board to ${project.name}` : `🗂️ ${who} set this floor's Notion board to every task`);
+        break;
+      }
       case 'gh.refresh':
         void floorOf(c)?.github.refresh();
         break;
@@ -1345,6 +1407,13 @@ export async function startServer(cfg: Config) {
     }
   };
 
+  void notion.refresh();
+  // Fresh while anyone is in the building; now and then otherwise.
+  const notionTimer = setInterval(() => {
+    const age = Date.now() - notion.tasks.fetchedAt;
+    if ((clients.size && age > NOTION_REFRESH_MS - 5000) || age > NOTION_IDLE_REFRESH_MS) void notion.refresh();
+  }, NOTION_REFRESH_MS);
+
   const resync = setInterval(() => {
     for (const c of clients.values()) {
       if (!c.stale.size || c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
@@ -1382,6 +1451,7 @@ export async function startServer(cfg: Config) {
   const shutdown = (keep = false) => {
     clearInterval(heartbeat);
     clearInterval(resync);
+    clearInterval(notionTimer);
     clearTimeout(floorsTimer);
     upgrader.stop();
     services.stop();

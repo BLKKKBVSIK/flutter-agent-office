@@ -3,6 +3,7 @@ import { floorPalette, normalizeRepo, sameRepo } from '../../shared/floors';
 import type { Net } from '../net';
 import { store } from '../state';
 import { h, openModal, timeAgo, type Modal } from './dom';
+import { notionProjectPicker, type ProjectPicker } from './notion';
 
 // The elevator's panel: a button for every floor (every project), and "add a project", which clones
 // one of the repositories the office's gh login can see and makes it a new floor. The first time
@@ -52,6 +53,8 @@ export function openElevator(opts: ElevatorOptions): void {
   const addBtn = h('button.btn.primary', { type: 'button' }, '🛗 Add floor');
   const refreshBtn = h('button.btn', { type: 'button', title: 'Ask GitHub for the list again' }, '↻');
   const close = setup ? null : h('button.btn.close', { 'aria-label': 'Close' }, '✕');
+  /** Which Notion project's tasks go on the new floor's board; only once the building reads a tasks database. */
+  let notionPicker: ProjectPicker | null = null;
 
   const needRepos = () => {
     const r = store.repos;
@@ -78,7 +81,7 @@ export function openElevator(opts: ElevatorOptions): void {
       'button.floor-btn',
       { type: 'button', class: here ? 'here' : '', disabled: f.cloning || here, title: here ? "You're on this floor" : f.cloning ? 'Still being cloned' : `Ride to ${f.name}` },
       h('span.floor-no', { style: `background:${p.trim}` }, String(i + 1)),
-      h('span.floor-text', {}, h('span.floor-name', {}, f.name, here ? h('span.here-tag', {}, 'you are here') : null), h('span.floor-sub', {}, f.repo ?? f.dir)),
+      h('span.floor-text', {}, h('span.floor-name', {}, f.name, here ? h('span.here-tag', {}, 'you are here') : null), h('span.floor-sub', {}, f.repo ?? f.dir, f.notionProject ? ` · 🗂️ ${f.notionProject.name}` : '')),
       h('span.floor-stats', {}, ...stats.flatMap((s, j) => (j ? [' ', s] : [s]))),
     );
     btn.addEventListener('click', () => {
@@ -163,10 +166,12 @@ export function openElevator(opts: ElevatorOptions): void {
     input.disabled = !!adding;
     if (!built) {
       built = true;
+      notionPicker = store.notion.database ? notionProjectPicker(net, undefined, undefined, 'None: every task assigned to me') : null;
       addEl.replaceChildren(
         h('h3', {}, setup && !store.floors.length ? 'Pick your first project' : '➕ Add a project'),
         h('div.repo-search', {}, input, refreshBtn),
         listEl,
+        notionPicker ? h('label.notion-row', {}, h('span', {}, '🗂️ Notion project'), notionPicker.el) : '',
         statusEl,
       );
     }
@@ -177,7 +182,7 @@ export function openElevator(opts: ElevatorOptions): void {
     adding = repo;
     error = '';
     renderAdd();
-    net.send({ t: 'floor.add', repo });
+    net.send({ t: 'floor.add', repo, notionProject: notionPicker?.value() });
   };
 
   const onAdded = (msg: Extract<ServerMsg, { t: 'floor.added' }>) => {
@@ -240,6 +245,7 @@ export function openElevator(opts: ElevatorOptions): void {
     onClose: () => {
       current = null;
       addedWaiters.delete(onAdded);
+      notionPicker?.destroy();
       for (const off of unsubs) off();
     },
   });

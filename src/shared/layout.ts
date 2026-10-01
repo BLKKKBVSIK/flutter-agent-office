@@ -102,6 +102,8 @@ export function deskSeat(desk: DeskDef, offset = 0.85): { x: number; z: number }
 
 /** Wall boards. `rotY` is the way the board faces (0 = +z, like the north-wall boards). */
 export const BOARDS = {
+  // The Notion tasks, north wall, in the corner west of the issues.
+  notion: { x: -15.9, y: 2.1, z: FLOOR.minZ + 0.08, rotY: 0, width: 3.6, height: 3, label: 'Notion' },
   issues: { x: -10.5, y: 2.1, z: FLOOR.minZ + 0.08, rotY: 0, width: 6, height: 3, label: 'Issues' },
   pulls: { x: -1.5, y: 2.1, z: FLOOR.minZ + 0.08, rotY: 0, width: 6, height: 3, label: 'Pull Requests' },
   // East wall, north of the lounge TV.

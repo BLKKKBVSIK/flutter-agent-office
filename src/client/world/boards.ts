@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { DESK_BY_ID } from '../../shared/layout';
-import type { GhIssue, GhPull, GhState, QueueState, QueueTask, ServiceInfo, WorkerInfo } from '../../shared/protocol';
+import { NOTION_INKS } from '../../shared/protocol';
+import type { GhIssue, GhPull, GhState, NotionState, QueueState, QueueTask, ServiceInfo, WorkerInfo } from '../../shared/protocol';
 import { workerForPull } from '../state';
 
 const NOTE_COLORS = ['#fff7b0', '#ffd6e0', '#caffbf', '#bde0fe', '#ffe5b4'];
@@ -23,15 +24,37 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLine
   return lines;
 }
 
+/** A sticky note on a cork board. `seed` picks its color and tilt, so a note keeps them between redraws. */
+interface Note {
+  seed: number;
+  head: string;
+  title: string;
+  grey?: boolean;
+  /** Whose desk it came from (PRs). */
+  worker?: WorkerInfo;
+  /** A line along the bottom, after a dot in `color` (Notion: severity and who's on it). */
+  foot?: { text: string; color: string };
+  /** A band down the left edge, in this color (Notion: the severity's). */
+  stripe?: string;
+}
+
+/** A number from a string, to seed a note's look with when there's no issue number. */
+function hash(s: string): number {
+  let x = 0;
+  for (const ch of s) x = (x * 31 + ch.charCodeAt(0)) | 0;
+  return Math.abs(x);
+}
+
 /** Renders a cork board with pinned sticky notes onto a canvas texture. */
 export class BoardTexture {
   readonly texture: THREE.CanvasTexture;
   private canvas = document.createElement('canvas');
   private ctx: CanvasRenderingContext2D;
 
-  constructor(private kind: 'issues' | 'pulls') {
-    this.canvas.width = 1200;
-    this.canvas.height = 600;
+  /** `width` and `height` are the canvas's, in the board's proportions. */
+  constructor(private kind: 'issues' | 'pulls' | 'notion', width = 1200, height = 600) {
+    this.canvas.width = width;
+    this.canvas.height = height;
     this.ctx = this.canvas.getContext('2d')!;
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
@@ -40,6 +63,42 @@ export class BoardTexture {
 
   /** `workers` lets PR notes name the desk they came from. */
   render(state: GhState<GhIssue> | GhState<GhPull>, workers?: Map<string, WorkerInfo>) {
+    const open = (state.items as (GhIssue | GhPull)[]).filter((i) => i.state === 'OPEN');
+    const notes = open.map((it): Note => ({
+      seed: it.number,
+      head: `#${it.number}`,
+      title: it.title,
+      grey: this.kind === 'pulls' && (it as GhPull).isDraft,
+      worker: this.kind === 'pulls' && workers ? workerForPull(workers.values(), it as GhPull) : undefined,
+    }));
+    const empty = state.error ? `⚠️ ${state.error}` : state.loading && !state.fetchedAt ? 'Loading…' : this.kind === 'issues' ? 'No open issues 🎉' : 'No open PRs';
+    this.draw(notes, empty);
+  }
+
+  /** The Notion tasks not done yet, the ones under way first. */
+  renderNotion(state: NotionState) {
+    const notes = state.items
+      .filter((t) => t.stage !== 'done')
+      .sort((a, b) => Number(b.stage === 'doing') - Number(a.stage === 'doing'))
+      .map((t): Note => {
+        const ink = t.severity ? NOTION_INKS[t.severity.color ?? 'default'] : undefined;
+        const who = t.assignees.map((p) => p.name.split(/\s+/)[0]).join(', ');
+        const foot = [t.severity?.name, who].filter(Boolean).join(' · ');
+        return { seed: hash(t.id), head: `${t.stage === 'doing' ? '🚧 ' : ''}${t.ref || t.status || 'Task'}`, title: t.title, stripe: ink, foot: foot ? { text: foot, color: ink ?? '#8d99ae' } : undefined };
+      });
+    const empty = !state.database
+      ? 'Press E to pick your Notion tasks database'
+      : state.error
+        ? `⚠️ ${state.error}`
+        : state.loading && !state.fetchedAt
+          ? 'Loading…'
+          : state.project
+            ? `No open tasks for you in ${state.project.name} 🎉`
+            : 'No open tasks for you 🎉';
+    this.draw(notes, empty);
+  }
+
+  private draw(open: Note[], empty: string) {
     const g = this.ctx;
     const W = this.canvas.width;
     const H = this.canvas.height;
@@ -52,14 +111,13 @@ export class BoardTexture {
       g.fillStyle = rnd() > 0.5 ? 'rgba(120,70,30,.18)' : 'rgba(255,240,210,.18)';
       g.fillRect(rnd() * W, rnd() * H, 3, 3);
     }
-    const open = (state.items as (GhIssue | GhPull)[]).filter((i) => i.state === 'OPEN');
     if (!open.length) {
-      const note = state.error ? `⚠️ ${state.error}` : state.loading && !state.fetchedAt ? 'Loading…' : this.kind === 'issues' ? 'No open issues 🎉' : 'No open PRs';
       g.font = '800 40px Nunito, ui-rounded, system-ui, sans-serif';
-      const lines = wrap(g, note.replace(/`/g, ''), 760, 4);
+      const boxW = Math.min(840, W - 60);
+      const lines = wrap(g, empty.replace(/`/g, ''), boxW - 80, 4);
       const boxH = 60 + lines.length * 50;
       g.fillStyle = '#fffaf3';
-      g.fillRect(W / 2 - 420, H / 2 - boxH / 2, 840, boxH);
+      g.fillRect(W / 2 - boxW / 2, H / 2 - boxH / 2, boxW, boxH);
       g.fillStyle = '#2b2d42';
       g.textAlign = 'center';
       g.textBaseline = 'middle';
@@ -70,8 +128,9 @@ export class BoardTexture {
       return;
     }
     // Fewer notes -> bigger notes, so a quiet board is still readable from across the room.
-    const n = Math.min(open.length, 15);
-    const cols = n <= 2 ? n : n <= 4 ? 2 : n <= 6 ? 3 : n <= 8 ? 4 : 5;
+    const n = Math.min(open.length, W < 1000 ? 9 : 15);
+    // A narrow board takes fewer columns.
+    const cols = W < 1000 ? (n <= 1 ? 1 : n <= 4 ? 2 : 3) : n <= 2 ? n : n <= 4 ? 2 : n <= 6 ? 3 : n <= 8 ? 4 : 5;
     const rows = Math.min(3, Math.ceil(n / cols));
     const scale = Math.min(2, Math.max(1, 3 / Math.max(cols, rows * 1.3)));
     const nw = Math.min(208 * scale, (W - 40) / cols - 30);
@@ -85,34 +144,46 @@ export class BoardTexture {
       const y = gy + r * (nh + gy);
       g.save();
       g.translate(x + nw / 2, y + nh / 2);
-      g.rotate(((it.number * 37) % 7 - 3) * 0.012);
+      g.rotate(((it.seed * 37) % 7 - 3) * 0.012);
       g.fillStyle = 'rgba(0,0,0,.25)';
       g.fillRect(-nw / 2 + 5, -nh / 2 + 7, nw, nh);
-      const draft = this.kind === 'pulls' && (it as GhPull).isDraft;
-      g.fillStyle = draft ? '#e9ecef' : NOTE_COLORS[it.number % NOTE_COLORS.length];
+      g.fillStyle = it.grey ? '#e9ecef' : NOTE_COLORS[it.seed % NOTE_COLORS.length];
       g.fillRect(-nw / 2, -nh / 2, nw, nh);
+      if (it.stripe) {
+        g.fillStyle = it.stripe;
+        g.fillRect(-nw / 2, -nh / 2, Math.max(8, nw * 0.045), nh);
+      }
       g.fillStyle = '#2b2d42';
       const fs = Math.round(22 * Math.min(scale, nh / 164));
-      const w = this.kind === 'pulls' && workers ? workerForPull(workers.values(), it as GhPull) : undefined;
-      const footer = w ? fs * 1.3 : 0;
-      g.font = `900 ${Math.round(fs * 1.35)}px Nunito, ui-rounded, system-ui, sans-serif`;
-      g.fillText(`#${it.number}`, -nw / 2 + 14, -nh / 2 + fs * 2);
+      const w = it.worker;
+      const foot = w ? { text: `${w.name} · ${DESK_BY_ID.get(w.deskId)?.label ?? 'desk'}`, color: w.color } : it.foot;
+      const footer = foot ? fs * 1.3 : 0;
+      // The heading shrinks a little to fit a narrow note before it's cut short.
+      let hs = Math.round(fs * 1.35);
+      g.font = `900 ${hs}px Nunito, ui-rounded, system-ui, sans-serif`;
+      const headW = g.measureText(it.head).width;
+      if (headW > nw - 28) {
+        hs = Math.max(Math.round(fs * 0.9), Math.floor((hs * (nw - 28)) / headW));
+        g.font = `900 ${hs}px Nunito, ui-rounded, system-ui, sans-serif`;
+      }
+      g.fillText(clip(g, it.head, nw - 28), -nw / 2 + 14, -nh / 2 + fs * 2);
       g.font = `700 ${fs}px Nunito, ui-rounded, system-ui, sans-serif`;
       wrap(g, it.title, nw - 28, Math.max(2, Math.floor((nh - fs * 3 - footer) / (fs * 1.1)))).forEach((line, li) => g.fillText(line, -nw / 2 + 14, -nh / 2 + fs * 3.4 + li * fs * 1.1));
-      if (w) {
-        // A dot in the worker's color and its desk, so you can tell whose PR it is from across the room.
+      if (foot) {
+        // A dot in the worker's color and its desk, so you can tell whose PR it is from across the room;
+        // on a Notion task, its severity's color, then the severity and who's on it.
         const r = fs * 0.3;
         const y = nh / 2 - fs * 0.75;
         g.beginPath();
         g.arc(-nw / 2 + 14 + r, y, r, 0, Math.PI * 2);
-        g.fillStyle = w.color;
+        g.fillStyle = foot.color;
         g.fill();
         g.lineWidth = 2;
         g.strokeStyle = '#2b2d42';
         g.stroke();
         g.fillStyle = '#5c5f73';
         g.font = `800 ${Math.round(fs * 0.78)}px Nunito, ui-rounded, system-ui, sans-serif`;
-        g.fillText(clip(g, `${w.name} · ${DESK_BY_ID.get(w.deskId)?.label ?? 'desk'}`, nw - 28 - r * 2 - 8), -nw / 2 + 14 + r * 2 + 8, y + fs * 0.28);
+        g.fillText(clip(g, foot.text, nw - 28 - r * 2 - 8), -nw / 2 + 14 + r * 2 + 8, y + fs * 0.28);
       }
       g.beginPath();
       g.arc(0, -nh / 2 + 10, 11, 0, Math.PI * 2);

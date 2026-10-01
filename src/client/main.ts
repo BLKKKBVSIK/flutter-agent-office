@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
-import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, SEATING_BY_ID, SLAB, beanbagsOut, deskSeat, inElevator, nextFreeSeat, seatAt, seatPlace, type SeatDef, type SeatPlace } from '../shared/layout';
+import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, SEATING_BY_ID, SLAB, beanbagsOut, deskSeat, inElevator, nextFreeSeat, seatAt, seatPlace, type SeatDef, type SeatPlace } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
 import type { AgentProvider, GongWhy, PeerInfo, WorkerInfo } from '../shared/protocol';
 import { isAsleep, isBusy } from '../shared/status';
@@ -32,6 +32,7 @@ import { openSearch } from './ui/search';
 import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
 import { openBoard } from './ui/boards';
+import { openNotionBoard } from './ui/notion';
 import { openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
 import { openTeam, routeTeamMessage } from './ui/team';
@@ -106,6 +107,9 @@ function mountBoard(mesh: THREE.Mesh, texture: THREE.Texture, render: () => void
 }
 const issuesTex = new BoardTexture('issues');
 mountBoard(office.boardMeshes.issues, issuesTex.texture, () => issuesTex.render(store.issues), ['issues']);
+// The Notion board is narrower than the others: its canvas keeps the board's proportions.
+const notionTex = new BoardTexture('notion', Math.round((600 * BOARDS.notion.width) / BOARDS.notion.height), 600);
+mountBoard(office.boardMeshes.notion, notionTex.texture, () => notionTex.renderNotion(store.notion), ['notion']);
 const pullsTex = new BoardTexture('pulls');
 const renderPullsBoard = () => pullsTex.render(store.pulls, store.workers);
 mountBoard(office.boardMeshes.pulls, pullsTex.texture, renderPullsBoard, ['pulls']);
@@ -826,7 +830,7 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
 
 function boardActions() {
   return {
-    queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string) => net.send({ t: 'queue.add', prompt, title, issue, provider, model }),
+    queue: (prompt: string, title: string, issue?: number, provider?: AgentProvider, model?: string) => net.send({ t: 'queue.add', prompt, title, issue, provider, model }),
     assign: (prompt: string, title: string) => sendToWorker(`🤖 ${title}`, { initial: prompt }),
     ask: (context: string, title: string) => sendToWorker(`✍️ ${title}`, { context }),
     goToDesk,
@@ -865,6 +869,7 @@ function interact(target: Interactable | null, key: DeskKey) {
   if (key !== 'E') return;
   if (target.kind === 'elevator') showElevator();
   else if (target.kind === 'issues' || target.kind === 'pulls') openBoard(target.kind, net, boardActions());
+  else if (target.kind === 'notion') openNotionBoard(net, boardActions());
   else if (target.kind === 'services') openServices();
   else if (target.kind === 'queue') showQueue();
   else if (target.kind === 'tv') watchShare();
@@ -1103,6 +1108,8 @@ function hintFor(it: Interactable): Hint {
       return board('📌 Issues board');
     case 'pulls':
       return board('🔀 Pull request board');
+    case 'notion':
+      return board(store.notion.project ? `🗂️ Notion · ${store.notion.project.name}` : '🗂️ Notion board');
     case 'services':
       return board('🌐 Services board');
     case 'queue': {
@@ -1340,7 +1347,7 @@ function backToGame() {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, coffee: 3, issues: 9, pulls: 9, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, coffee: 3, issues: 9, notion: 9, pulls: 9, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, and whether it is within reach (plus `slack` meters). */
@@ -1486,6 +1493,7 @@ $('btn-mute').addEventListener('click', () => voice.toggleMute());
 $('btn-share').addEventListener('click', () => void toggleShare());
 $('btn-issues').addEventListener('click', () => openBoard('issues', net, boardActions()));
 $('btn-pulls').addEventListener('click', () => openBoard('pulls', net, boardActions()));
+$('btn-notion').addEventListener('click', () => openNotionBoard(net, boardActions()));
 mountServicesButton($('btn-services'));
 mountQueueButton($('btn-queue'), showQueue);
 $('btn-team').addEventListener('click', () => openTeam(net));

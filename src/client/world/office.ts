@@ -19,7 +19,7 @@ export interface Collider {
   bottom?: number;
 }
 
-export type InteractKind = 'desk' | 'issues' | 'pulls' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard';
+export type InteractKind = 'desk' | 'issues' | 'notion' | 'pulls' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -1031,7 +1031,8 @@ export function buildOffice(): Office {
 
   // Plants around the room
   const plants: [number, number, number][] = [
-    [-17.2, -12.2, 1.4],
+    // On the west wall between the windows: the north-west corner has the Notion board.
+    [-17.3, -6, 1.3],
     [17.2, -12.2, 1.5],
     [17.2, 12.2, 1.3],
     [-17.2, 8.5, 1.2],

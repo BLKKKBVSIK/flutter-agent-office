@@ -2,8 +2,9 @@ import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { FLOOR_PALETTES, MAX_FLOORS, normalizeRepo, sameRepo } from '../shared/floors.js';
-import type { RepoChoice } from '../shared/protocol.js';
+import type { NotionRef, RepoChoice } from '../shared/protocol.js';
 import { gh } from './github.js';
+import { notionRef } from './notion.js';
 
 /** A floor as floors.json keeps it. */
 export interface FloorDef {
@@ -15,6 +16,8 @@ export interface FloorDef {
   palette: number;
   addedBy: string;
   addedAt: number;
+  /** The Notion project whose tasks go on the floor's 🗂️ Notion board. */
+  notionProject?: NotionRef;
 }
 
 /** How long the list of repositories `gh` can see is reused before it's asked again. */
@@ -73,7 +76,7 @@ export class Building {
    * floor as soon as the clone begins; resolves to the finished floor, or to why there's none. A
    * checkout that's already where the clone would go is used as it is.
    */
-  async add(input: string, by: string, started: (def: FloorDef) => void): Promise<FloorDef | string> {
+  async add(input: string, by: string, started: (def: FloorDef) => void, notionProject?: NotionRef): Promise<FloorDef | string> {
     const wanted = normalizeRepo(input);
     if (!wanted) return 'Pick a repository, or type it as owner/name';
     if (this.defs.some((d) => sameRepo(d.repo, wanted))) return `${wanted} already has a floor`;
@@ -94,6 +97,7 @@ export class Building {
     const dest = path.join(this.projectsDir, owner, name);
     if (this.defs.some((d) => path.resolve(d.dir) === dest)) return `${dest} is already a floor`;
     const def = this.newDef(name, repo, dest, by);
+    if (notionProject) def.notionProject = notionProject;
     this.cloning.set(key, def);
     started(def);
     try {
@@ -105,6 +109,16 @@ export class Building {
     this.defs.push(def);
     this.save();
     return def;
+  }
+
+  /** Points a floor's 🗂️ Notion board at a project, or at every task (none). False when there's no such floor. */
+  setNotionProject(id: string, project: NotionRef | undefined): boolean {
+    const def = this.defs.find((d) => d.id === id);
+    if (!def) return false;
+    if (project) def.notionProject = project;
+    else delete def.notionProject;
+    this.save();
+    return true;
   }
 
   /** Repositories the office's `gh` login can clone, most recently pushed first. */
@@ -148,6 +162,7 @@ export class Building {
           palette: Number.isInteger(s.palette) && (s.palette as number) >= 0 ? (s.palette as number) : 0,
           addedBy: typeof s.addedBy === 'string' ? s.addedBy : '?',
           addedAt: typeof s.addedAt === 'number' ? s.addedAt : Date.now(),
+          notionProject: notionRef(s.notionProject),
         });
       }
     } catch (err) {

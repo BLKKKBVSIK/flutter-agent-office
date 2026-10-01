@@ -16,6 +16,9 @@ purify.addHook('afterSanitizeAttributes', (node) => {
   } else if (node.tagName === 'IMG') {
     node.setAttribute('loading', 'lazy');
     node.setAttribute('referrerpolicy', 'no-referrer');
+  } else if (node.tagName === 'VIDEO' || node.tagName === 'AUDIO') {
+    node.setAttribute('controls', '');
+    node.setAttribute('preload', 'metadata');
   } else if (node.tagName === 'INPUT') {
     // Task list boxes: show them ticked or not, but they don't do anything here.
     node.setAttribute('disabled', '');
@@ -83,8 +86,11 @@ function absolutize(root: HTMLElement, itemUrl: string, repoUrl: string) {
   for (const img of root.querySelectorAll('img[src]')) img.setAttribute('src', fix(img.getAttribute('src') ?? '', false));
 }
 
-/** Renders markdown into a `.md` block. `itemUrl` (the issue or PR on GitHub) anchors its links. */
-export function markdown(src: string, itemUrl?: string): HTMLElement {
+/**
+ * Renders markdown into a `.md` block. `itemUrl` (the issue or PR on GitHub) anchors its links;
+ * `refs: false` leaves #123 and @name alone (text that isn't from GitHub).
+ */
+export function markdown(src: string, itemUrl?: string, opts: { refs?: boolean } = {}): HTMLElement {
   const el = h('div.md');
   if (!src.trim()) {
     el.append(h('p.none', {}, 'No description provided.'));
@@ -95,8 +101,42 @@ export function markdown(src: string, itemUrl?: string): HTMLElement {
   const repoUrl = itemUrl ? repoUrlOf(itemUrl) : undefined;
   if (itemUrl && repoUrl) absolutize(el, itemUrl, repoUrl);
   alerts(el);
-  linkify(el, repoUrl);
+  if (opts.refs !== false) linkify(el, repoUrl);
   return el;
+}
+
+const NOTION_LAYOUT_RE = /^<\/?columns?\b[^>]*>$/;
+const NOTION_MEDIA_RE = /<(video|audio|file|pdf)\s+src="([^"]+)"[^>]*?(?:\/>|>(.*?)<\/\1>)/g;
+
+/**
+ * Notion's markdown (GET /v1/pages/:id/markdown) as plain markdown: columns flattened into the page
+ * (their content is indented under them, which would read as code), empty blocks as blank lines,
+ * videos and sound as players, other files as links.
+ */
+export function fromNotion(src: string): string {
+  const out: string[] = [];
+  let depth = 0;
+  for (const line of src.split('\n')) {
+    const t = line.trim();
+    if (NOTION_LAYOUT_RE.test(t)) {
+      depth = Math.max(0, depth + (t.startsWith('</') ? -1 : 1));
+      out.push('');
+      continue;
+    }
+    if (t === '<empty-block/>') {
+      out.push('');
+      continue;
+    }
+    const l = depth ? line.replace(new RegExp(`^\\t{0,${depth}}`), '') : line;
+    out.push(
+      l.replace(NOTION_MEDIA_RE, (_, tag: string, url: string, caption?: string) => {
+        if (tag === 'video' || tag === 'audio') return `<${tag} src="${url}"></${tag}>`;
+        const name = caption?.trim() || decodeURIComponent(url.split('?')[0].split('/').pop() ?? '') || 'file';
+        return `[📎 ${name}](${url})`;
+      }),
+    );
+  }
+  return out.join('\n');
 }
 
 /** https://github.com/owner/repo from an issue or PR URL. */

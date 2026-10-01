@@ -757,3 +757,69 @@ a.when:hover { text-decoration: underline; }
 .arcade iframe { display: block; border: 0; transform-origin: 0 0; }
 .arcade-bar { position: absolute; top: calc(100% + 10px); left: 50%; translate: -50% 0; display: flex; align-items: center; gap: 12px; white-space: nowrap; padding: 6px 6px 6px 14px; background: var(--paper); border: 3px solid var(--ink); border-radius: 14px; box-shadow: 0 4px 0 var(--ink); font-weight: 800; font-size: 14px; }
 .arcade-bar .tip { color: var(--muted); font-size: 12px; }
+
+/* The 🗂️ Notion board: its project picker, the database picker the first time, and a task's window. */
+.notion-board header .notion-project { max-width: 320px; }
+.notion-setup { display: flex; flex-direction: column; gap: 10px; max-width: 620px; text-align: left; }
+.notion-setup > small { font-weight: 700; color: var(--muted); }
+.notion-dbs { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
+.notion-db { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 12px; border: 2px solid var(--ink); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.notion-db:hover, .notion-db.sel { background: #ffe3d6; }
+.notion-db small { color: var(--muted); font-weight: 700; white-space: nowrap; }
+.elevator .notion-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: 800; }
+.elevator .notion-row .notion-project { flex: 1; min-width: 0; }
+.modal.notion-task { width: min(1180px, 100%); height: min(920px, calc(100vh - 32px)); }
+.nt-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.nt-main { flex: 1; min-width: 0; overflow: auto; padding: 12px 18px 24px; }
+.nt-main > section + section { margin-top: 18px; }
+.nt-main h3, .nt-side h3 { margin: 4px 0 8px; font-size: 15px; font-weight: 900; }
+.nt-main .md { padding: 0; }
+.nt-main .md .nt-pic { display: inline-block; vertical-align: top; margin: 0 8px 8px 0; }
+.nt-main .md img { display: block; max-width: 100%; max-height: 380px; width: auto; border-radius: 8px; border: 2px solid var(--ink); background: #fff; }
+.nt-main .md video { max-width: 100%; max-height: 420px; border-radius: 8px; background: #000; }
+.nt-side .nt-chip { border-radius: 8px; }
+.nt-side { width: 300px; flex: none; overflow: auto; padding: 12px 14px; border-left: 2px solid rgba(43, 45, 66, .15); background: rgba(255, 250, 243, .6); }
+.nt-fields { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px 10px; margin: 0; font-size: 13px; }
+.nt-fields dt { font-weight: 800; color: var(--muted); overflow-wrap: anywhere; }
+.nt-fields dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.nt-fields a, .nt-files a, .nt-ticket header a { color: #1d6fd6; text-decoration: none; font-weight: 800; }
+.nt-chips, .nt-people, .nt-files { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.nt-chip { padding: 1px 8px; border-radius: 999px; border: 1.5px solid var(--ink); background: #fff; font-size: 12px; font-weight: 800; color: var(--ink); }
+.nt-chip.hot { background: #ffe3d6; }
+.nt-chip.sev { background: #ffd6e0; }
+.nt-person { display: inline-flex; align-items: center; gap: 4px; font-weight: 800; color: var(--ink); }
+.nt-person img, .nt-initial { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--ink); object-fit: cover; }
+.nt-initial { display: inline-grid; place-items: center; font-size: 11px; background: #e0f2fe; }
+.nt-person + .nt-person { margin-left: 4px; }
+.nt-quiet { color: var(--muted); font-weight: 700; font-size: 13px; }
+.nt-text h5, .nt-attached h5 { margin: 10px 0 4px; font-size: 12.5px; font-weight: 900; color: var(--muted); }
+.nt-text p { margin: 0; white-space: pre-wrap; font-weight: 600; line-height: 1.5; }
+.nt-gallery { display: flex; flex-wrap: wrap; gap: 10px; }
+.nt-thumb img { display: block; max-height: 240px; max-width: 320px; border-radius: 8px; border: 2px solid var(--ink); background: #fff; }
+.nt-video, .nt-audio { margin: 0; }
+.nt-video video { display: block; max-height: 360px; max-width: 100%; border-radius: 8px; border: 2px solid var(--ink); background: #000; }
+.nt-video figcaption, .nt-audio figcaption { font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 2px; }
+.nt-file { padding: 6px 10px; border: 2px solid var(--ink); border-radius: 8px; background: #fff; color: var(--ink); font-weight: 800; text-decoration: none; }
+.nt-ticket { border: 2.5px solid var(--ink); border-radius: 12px; background: #fff; padding: 10px 14px 12px; margin-bottom: 12px; box-shadow: 0 3px 0 rgba(43, 45, 66, .35); }
+.nt-ticket header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.nt-ticket h4 { margin: 0 0 6px; font-size: 15px; font-weight: 900; }
+.nt-ticket .md { margin-top: 8px; }
+.nt-more { margin-top: 10px; }
+.nt-more .nt-fields { grid-template-columns: minmax(150px, auto) 1fr; }
+.nt-card-people { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--ink); font-weight: 800; }
+.nt-faces { display: inline-flex; }
+.nt-card-people .nt-person { font-size: 0; gap: 0; }
+.nt-card-people .nt-person img, .nt-card-people .nt-initial { width: 18px; height: 18px; font-size: 10px; }
+.nt-card-people .nt-person + .nt-person { margin-left: -5px; }
+.card .meta .nt-chip { font-size: 10.5px; padding: 0 6px; }
+.nt-more summary { cursor: pointer; font-weight: 800; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+@media (max-width: 800px) { .nt-body { flex-direction: column; overflow: auto; } .nt-side { width: auto; border-left: 0; border-top: 2px solid rgba(43, 45, 66, .15); } .nt-main { overflow: visible; } }
+.nt-comments { margin-top: 12px; }
+.nt-comments h5 { margin: 10px 0 6px; font-size: 12.5px; font-weight: 900; color: var(--muted); }
+.nt-thread { border: 2px solid rgba(43, 45, 66, .18); border-radius: 10px; background: #fffdf8; padding: 8px 10px; margin-bottom: 8px; }
+.nt-comment + .nt-comment { margin-top: 8px; }
+.nt-comment.reply { margin-left: 18px; padding-left: 10px; border-left: 3px solid rgba(43, 45, 66, .15); }
+.nt-comment-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.nt-comment .md { padding: 4px 0 0 26px; font-size: 14px; }
+.nt-comment .nt-gallery { padding: 6px 0 0 26px; }
+.nt-on { margin: 2px 0 0 26px; font-size: 12px; font-weight: 700; color: var(--muted); font-style: italic; }

@@ -84,11 +84,11 @@ export async function ntn(args: string[], timeout = 45_000): Promise<string> {
 /** Notion's own hiccups, worth asking again: a 5xx, a rate limit, or the connection dropping. */
 const PASSING = /took more than|internal_server_error|service_unavailable|bad gateway|gateway_timeout|rate_limited|\b(500|502|503|504|429)\b|cross-cell|ECONNRESET|ETIMEDOUT/i;
 
-/** Calls the public Notion API through `ntn api`: a GET, or a POST of `body`. Asks again, twice, when Notion hiccups. */
-async function api<T = any>(route: string, body?: unknown): Promise<T> {
+/** Calls the public Notion API through `ntn api`: a GET, or a POST (or `method`) of `body`. Asks again, twice, when Notion hiccups. */
+async function api<T = any>(route: string, body?: unknown, method?: 'PATCH'): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
-      const out = await ntn(body === undefined ? ['api', route] : ['api', route, '-d', JSON.stringify(body)]);
+      const out = await ntn([...(body === undefined ? ['api', route] : ['api', route, '-d', JSON.stringify(body)]), ...(method ? ['-X', method] : [])]);
       const res = JSON.parse(out) as { object?: string; message?: string; code?: string };
       if (res?.object === 'error') throw new Error(friendly(`${res.code ? `${res.code}: ` : ''}${res.message ?? 'Notion said no'}`));
       return res as T;
@@ -145,6 +145,11 @@ const MAX_TICKETS = 10;
 /** A task's details are read again after this long (Notion's file links last an hour). */
 const DETAIL_TTL_MS = 60_000;
 
+/** Worst severity first, then most urgent; within those, the one touched last. */
+export function byUrgency(a: NotionTask, b: NotionTask): number {
+  return a.severityRank - b.severityRank || a.priorityRank - b.priorityRank || b.updatedAt.localeCompare(a.updatedAt);
+}
+
 interface Saved {
   database?: NotionRef;
 }
@@ -162,6 +167,8 @@ export class Notion {
   private projectCache?: { database: string; at: number; projects: Promise<NotionProjectChoice[]> };
   /** Bumped when the database changes, so a fetch from the old one doesn't land. */
   private generation = 0;
+  /** When the office last changed a task in Notion: a fetch that started before then may not have it. */
+  private wroteAt = 0;
   private details = new Map<string, { at: number; detail: Promise<NotionTaskDetail> }>();
   private users = new Map<string, Promise<NotionPerson | undefined>>();
   private timer?: NodeJS.Timeout;
@@ -236,7 +243,9 @@ export class Notion {
   /** A floor's board: the tasks linked to its project, or every task when it has none. */
   view(project?: NotionRef): NotionState {
     const items = project ? this.tasks.items.filter((t) => inProject(t, project.id)) : this.tasks.items;
-    return { ...this.tasks, items, database: this.database, project, me: this.me?.name };
+    const status = this.database && this.schema?.database === this.database.id ? this.schema.schema.status : undefined;
+    const statuses = status ? [...status.stages].map(([name, stage]) => ({ name, stage })) : undefined;
+    return { ...this.tasks, items, database: this.database, project, me: this.me?.name, ...(statuses ? { statuses } : {}) };
   }
 
   async refresh(): Promise<void> {
@@ -250,6 +259,7 @@ export class Notion {
     }
     this.tasks = { ...this.tasks, loading: true };
     this.onChange();
+    const started = Date.now();
     let next: GhState<NotionTask>;
     try {
       const [schema, me] = await Promise.all([this.schemaOf(database.id), this.whoami()]);
@@ -268,17 +278,60 @@ export class Notion {
           : Promise.resolve([]),
       ]);
       const items = [...open, ...finished].map((p) => toTask(p, schema));
-      // Most urgent first; within a priority, the one touched last.
-      items.sort((a, b) => a.priorityRank - b.priorityRank || b.updatedAt.localeCompare(a.updatedAt));
+      items.sort(byUrgency);
       next = { items, fetchedAt: Date.now(), loading: false };
     } catch (err) {
       next = { ...this.tasks, loading: false, error: (err as Error).message, fetchedAt: Date.now() };
     }
     if (gen !== this.generation) return;
+    // A task was moved while this was being read, so it may show the old status: read again.
+    if (this.wroteAt >= started) {
+      this.tasks = { ...this.tasks, loading: false };
+      return this.refresh();
+    }
     this.tasks = next;
     this.onChange();
     // The task windows name the projects; have the list ready before anyone opens one.
     if (!next.error) void this.projects().catch(() => undefined);
+  }
+
+  /**
+   * Sets a task on the board to `status` (an option of the status property), in Notion. The board
+   * shows it moved straight away and goes back if Notion says no; resolves to why not, if it can't be.
+   */
+  async setStatus(id: string, status: string): Promise<string | undefined> {
+    const database = this.database;
+    if (!database) return 'Pick the Notion tasks database first';
+    let schema: TaskSchema;
+    try {
+      schema = await this.schemaOf(database.id);
+    } catch (err) {
+      return `Couldn't read the tasks database: ${(err as Error).message}`;
+    }
+    const prop = schema.status;
+    if (!prop) return 'The tasks database has no status property';
+    const stage = prop.stages.get(status);
+    if (!stage) return `The status has no option "${status}"`;
+    const want = id.replace(/-/g, '');
+    const task = this.tasks.items.find((t) => t.id.replace(/-/g, '') === want);
+    if (!task) return "That task isn't on the board";
+    if (task.status === status) return undefined;
+    const put = (t: NotionTask) => {
+      this.tasks = { ...this.tasks, items: this.tasks.items.map((x) => (x.id === t.id ? t : x)) };
+      this.onChange();
+    };
+    this.wroteAt = Date.now();
+    put({ ...task, status, stage, updatedAt: new Date().toISOString() });
+    try {
+      await api(`v1/pages/${task.id}`, { properties: { [prop.name]: { [prop.type]: { name: status } } } }, 'PATCH');
+    } catch (err) {
+      put(task);
+      return `Notion didn't take the new status: ${(err as Error).message}`;
+    } finally {
+      this.wroteAt = Date.now();
+      this.details.delete(want);
+    }
+    return undefined;
   }
 
   /** Databases that could be the tasks database: the ones with a people property, those with a status too first. */

@@ -29,6 +29,8 @@ export interface NotionTask {
   assignees: NotionPerson[];
   /** How bad it is (Bloquant, Majeur…): its own severity, or the linked ticket's. */
   severity?: NotionChip;
+  /** How bad its severity is, 0 worst (Bloquant), 4 for one the office can't place, 5 when it has none. */
+  severityRank: number;
   /** What kind of work it is (Bug, Amélioration…), the same way. */
   kind?: NotionChip;
   /** The projects it's linked to, by page id. */
@@ -46,6 +48,14 @@ export interface NotionState extends GhState<NotionTask> {
   project?: NotionRef;
   /** Who the tasks are assigned to (the `ntn` login). */
   me?: string;
+  /** The status property's options, in Notion's order, with the column each one is in; none when it has no status. */
+  statuses?: NotionStatusOption[];
+}
+
+/** An option of the tasks' status, and the board column it puts a task in. */
+export interface NotionStatusOption {
+  name: string;
+  stage: NotionTask['stage'];
 }
 
 /** The colors Notion gives select options. */
@@ -178,7 +188,9 @@ export type NotionClientMsg =
   /** The projects the tasks database links to; answered with `notion.projects`. */
   | { t: 'notion.projects'; refresh?: boolean }
   /** Show only this project's tasks on the floor you're on (none: every task assigned to you). */
-  | { t: 'notion.project'; project: NotionRef | null };
+  | { t: 'notion.project'; project: NotionRef | null }
+  /** Set a task on the board to this option of the status property, in Notion. */
+  | { t: 'notion.status'; id: string; status: string };
 
 export type NotionServerMsg =
   | { t: 'notion.tasks'; state: NotionState }

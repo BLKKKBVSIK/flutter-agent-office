@@ -8,6 +8,7 @@ import type { BoardActions } from '../../ui/github/prompts';
 import { markdown } from '../../ui/markdown';
 import { providerPicker } from '../../ui/provider';
 import { fromNotion } from './markdown';
+import { draggableNote, dropColumn, statusPicker } from './status';
 
 // The 🗂️ Notion board: the tasks assigned to the office's `ntn` login, in the tasks database the
 // building reads (picked here the first time), narrowed to the floor's Notion project if it has one.
@@ -124,15 +125,16 @@ export function notionProjectPicker(net: Net, initial: NotionRef | undefined, on
 }
 
 interface Column {
+  stage: NotionTask['stage'];
   title: string;
   items: NotionTask[];
 }
 
 function columns(items: NotionTask[]): Column[] {
   return [
-    { title: '📥 To do', items: items.filter((t) => t.stage === 'todo') },
-    { title: '🚧 In progress', items: items.filter((t) => t.stage === 'doing') },
-    { title: '✅ Done', items: items.filter((t) => t.stage === 'done').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) },
+    { stage: 'todo', title: '📥 To do', items: items.filter((t) => t.stage === 'todo') },
+    { stage: 'doing', title: '🚧 In progress', items: items.filter((t) => t.stage === 'doing') },
+    { stage: 'done', title: '✅ Done', items: items.filter((t) => t.stage === 'done').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) },
   ];
 }
 
@@ -158,6 +160,9 @@ export function openNotionBoard(net: Net, actions: BoardActions) {
   let choosing = false;
   let picker: ProjectPicker | null = null;
   let pickerFor: string | undefined;
+  /** A note is being dragged: the board waits to redraw until it's dropped, so it isn't pulled from under the pointer. */
+  let dragging = false;
+  let stale = false;
 
   const statusText = () => {
     const st = store.notion;
@@ -213,6 +218,8 @@ export function openNotionBoard(net: Net, actions: BoardActions) {
   };
 
   const render = () => {
+    if (dragging) return void (stale = true);
+    stale = false;
     const st = store.notion;
     statusText();
     renderPicker();
@@ -228,8 +235,7 @@ export function openNotionBoard(net: Net, actions: BoardActions) {
       const ul = h('ul');
       col.items.forEach((t, i) => {
         const q = queued(t);
-        ul.append(
-          noteCard(
+        const note = noteCard(
             seedOf(t.id),
             [t.ref, t.priority].filter(Boolean).join(' · ') || t.status,
             t.title,
@@ -247,11 +253,18 @@ export function openNotionBoard(net: Net, actions: BoardActions) {
             ],
             i,
             () => openNotionTask(t, net, actions),
-          ),
-        );
+          );
+        draggableNote(note, t, (on) => {
+          dragging = on;
+          // Let the drop land first: it sends the move, and the board redraws with it.
+          if (!on && stale) setTimeout(render);
+        });
+        ul.append(note);
       });
       if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
-      body.append(h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul));
+      const section = h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul);
+      dropColumn(net, section, col.stage);
+      body.append(section);
     }
     body.querySelectorAll('.column > ul').forEach((ul, i) => (ul.scrollTop = scrolled[i] ?? 0));
   };
@@ -434,10 +447,16 @@ function openNotionTask(t: NotionTask, net: Net, actions: BoardActions) {
     onQueue ? (onQueue.status === 'running' ? `🤖 ${onQueue.workerName ?? 'A worker'} is on it` : '📋 On the queue') : '📋 Add to queue',
   );
   const done = t.stage === 'done';
+  const pill = h('span', { class: `pill ${done ? 'offline' : t.stage === 'doing' ? 'working' : 'done'}` }, t.status || t.stage);
+  const status = t.status && store.notion.statuses?.length ? statusPicker(net, t, (stage) => (pill.className = `pill nt-status-pill ${stage === 'done' ? 'offline' : stage === 'doing' ? 'working' : 'done'}`)) : null;
+  if (status) {
+    pill.className += ' nt-status-pill';
+    pill.replaceChildren(status.el);
+  }
   const el = h(
     'div.modal.gh-window.notion-task',
     { role: 'dialog', 'aria-label': `Notion task ${title}` },
-    h('header', {}, h('span', { class: `pill ${done ? 'offline' : t.stage === 'doing' ? 'working' : 'done'}` }, t.status || t.stage), h('h2', { title: t.title }, title), close),
+    h('header', {}, pill, h('h2', { title: t.title }, title), close),
     meta,
     h('div.nt-body', {}, main, side),
     h(
@@ -511,7 +530,12 @@ function openNotionTask(t: NotionTask, net: Net, actions: BoardActions) {
     );
   }
 
-  const modal = openModal(el, { onClose: () => void generation++ });
+  const modal = openModal(el, {
+    onClose: () => {
+      generation++;
+      status?.destroy();
+    },
+  });
   close.addEventListener('click', () => modal.close());
   load();
 }

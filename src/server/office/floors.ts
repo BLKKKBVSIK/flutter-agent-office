@@ -4,6 +4,7 @@ import type { FloorDef } from '../building.js';
 import { Floor, type FloorContext } from '../floor.js';
 import { ROOF } from '../../shared/rooftop.js';
 import type { FloorInfo, ServerMsg } from '../../shared/protocol.js';
+import type { PromptSource } from '../prompts.js';
 import type { Ctx, FloorHelpers, FloorsOpen } from './context.js';
 import { SLOW_CLIENT_BYTES, type Client } from './client.js';
 
@@ -128,7 +129,17 @@ export async function openFloors(ctx: Ctx, hookPort: number): Promise<FloorsOpen
       return undefined;
     }
     try {
-      const floor = new Floor(def, floorContext);
+      // The Notion agent's brief names this floor's tasks database and project (see Notion.brief).
+      const base = floorContext.prompts;
+      const prompts: PromptSource = {
+        text: (id) => {
+          const text = base.text(id);
+          if (id !== 'station.issues') return text;
+          return `${text}\n\n${ctx.notion?.brief(def.notionProject) ?? "The building hasn't picked its Notion tasks database yet: tell whoever asks to press E at the Notion board and pick it, then ask you again."}`;
+        },
+        agent: () => base.agent(),
+      };
+      const floor = new Floor(def, { ...floorContext, prompts });
       floors.set(def.id, floor);
       return floor;
     } catch (err) {

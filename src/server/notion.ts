@@ -48,6 +48,8 @@ function run(args: string[], timeout: number): Promise<string> {
     const child = execFile(bin, args, { maxBuffer: 32 * 1024 * 1024, timeout }, (err, stdout, stderr) => {
       if (!err) return resolve(stdout);
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return reject(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+      // Killed at the timeout: Notion is slow at times, so it's worth asking again (see PASSING).
+      if (err.killed) return reject(new Error(`Notion took more than ${Math.round(timeout / 1000)}s to answer`));
       // ntn prints the API's error body on stdout or stderr, depending on the failure.
       const raw = `${stderr || ''}\n${stdout || ''}`.trim() || err.message;
       let msg = raw;
@@ -65,7 +67,7 @@ function run(args: string[], timeout: number): Promise<string> {
 }
 
 /** Runs `ntn`, from $PATH or where its installer puts it (a service's $PATH often leaves ~/.local/bin out). */
-export async function ntn(args: string[], timeout = 60_000): Promise<string> {
+export async function ntn(args: string[], timeout = 45_000): Promise<string> {
   try {
     return await run(args, timeout);
   } catch (err) {
@@ -80,13 +82,13 @@ export async function ntn(args: string[], timeout = 60_000): Promise<string> {
 }
 
 /** Notion's own hiccups, worth asking again: a 5xx, a rate limit, or the connection dropping. */
-const PASSING = /internal_server_error|service_unavailable|bad gateway|gateway_timeout|rate_limited|\b(500|502|503|504|429)\b|cross-cell|ECONNRESET|ETIMEDOUT/i;
+const PASSING = /took more than|internal_server_error|service_unavailable|bad gateway|gateway_timeout|rate_limited|\b(500|502|503|504|429)\b|cross-cell|ECONNRESET|ETIMEDOUT/i;
 
-/** Calls the public Notion API through `ntn api`: a GET, or a POST of `body`. Asks again, twice, when Notion hiccups. */
-async function api<T = any>(route: string, body?: unknown): Promise<T> {
+/** Calls the public Notion API through `ntn api`: a GET, or a POST (or `method`) of `body`. Asks again, twice, when Notion hiccups. */
+async function api<T = any>(route: string, body?: unknown, method?: 'PATCH'): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
-      const out = await ntn(body === undefined ? ['api', route] : ['api', route, '-d', JSON.stringify(body)]);
+      const out = await ntn([...(body === undefined ? ['api', route] : ['api', route, '-d', JSON.stringify(body)]), ...(method ? ['-X', method] : [])]);
       const res = JSON.parse(out) as { object?: string; message?: string; code?: string };
       if (res?.object === 'error') throw new Error(friendly(`${res.code ? `${res.code}: ` : ''}${res.message ?? 'Notion said no'}`));
       return res as T;
@@ -136,10 +138,17 @@ async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promis
 /** How often the tasks are fetched while anyone's in the building, and otherwise. */
 const REFRESH_MS = 90_000;
 const IDLE_REFRESH_MS = 10 * 60_000;
+/** How soon a fetch that failed is tried again, while anyone's in the building. */
+const RETRY_MS = 20_000;
 /** How many linked tickets the task window reads. */
 const MAX_TICKETS = 10;
 /** A task's details are read again after this long (Notion's file links last an hour). */
 const DETAIL_TTL_MS = 60_000;
+
+/** Worst severity first, then most urgent; within those, the one touched last. */
+export function byUrgency(a: NotionTask, b: NotionTask): number {
+  return a.severityRank - b.severityRank || a.priorityRank - b.priorityRank || b.updatedAt.localeCompare(a.updatedAt);
+}
 
 interface Saved {
   database?: NotionRef;
@@ -158,6 +167,8 @@ export class Notion {
   private projectCache?: { database: string; at: number; projects: Promise<NotionProjectChoice[]> };
   /** Bumped when the database changes, so a fetch from the old one doesn't land. */
   private generation = 0;
+  /** When the office last changed a task in Notion: a fetch that started before then may not have it. */
+  private wroteAt = 0;
   private details = new Map<string, { at: number; detail: Promise<NotionTaskDetail> }>();
   private users = new Map<string, Promise<NotionPerson | undefined>>();
   private timer?: NodeJS.Timeout;
@@ -180,8 +191,10 @@ export class Notion {
     void this.refresh();
     this.timer = setInterval(() => {
       const age = Date.now() - this.tasks.fetchedAt;
-      if ((busy() && age > REFRESH_MS - 5000) || age > IDLE_REFRESH_MS) void this.refresh();
-    }, REFRESH_MS);
+      // A fetch that failed (Notion is slow at times) is tried again soon, not at the next round.
+      const due = busy() ? (this.tasks.error ? RETRY_MS : REFRESH_MS - 5000) : IDLE_REFRESH_MS;
+      if (age > due) void this.refresh();
+    }, RETRY_MS / 2);
   }
 
   stop() {
@@ -193,10 +206,46 @@ export class Notion {
     if (Date.now() - this.tasks.fetchedAt > REFRESH_MS) void this.refresh();
   }
 
+  /**
+   * What the 🗂️ Notion agent (the kiosk by the board) needs to work in the tasks database: its ids
+   * and properties, who to assign tasks to, and the floor's project, with the ntn commands for each
+   * job. Undefined until the building reads a database; sketchier until the first fetch has read its schema.
+   */
+  brief(project?: NotionRef): string | undefined {
+    const db = this.database;
+    if (!db) return undefined;
+    const schema = this.schema?.database === db.id ? this.schema.schema : undefined;
+    const me = this.me;
+    const todo = schema?.status && [...schema.status.stages].find(([, s]) => s === 'todo')?.[0];
+    const q = (v: string) => JSON.stringify(v);
+    const props = schema
+      ? [
+          `${q(schema.title)}: { "title": [{ "text": { "content": "<title>" } }] }`,
+          me ? `${q(schema.assignee)}: { "people": [{ "id": ${q(me.id)} }] }` : '',
+          schema.status && todo ? `${q(schema.status.name)}: { ${q(schema.status.type)}: { "name": ${q(todo)} } }` : '',
+          schema.project && project ? `${q(schema.project.name)}: { "relation": [{ "id": ${q(project.id)} }] }` : '',
+        ].filter(Boolean)
+      : [];
+    return [
+      `The tasks database is "${db.name}" (data source ${db.id}).${me ? ` Tasks are assigned to ${me.name} (Notion user ${me.id}), whose tasks are on the board.` : ''}${project ? ` This floor works on the Notion project "${project.name}" (page ${project.id}): every task you create is linked to it.` : ''}`,
+      schema
+        ? `Its properties: the title is ${q(schema.title)}, the assignee ${q(schema.assignee)}${schema.status ? `, the status ${q(schema.status.name)} (${[...schema.status.stages.keys()].map(q).join(', ')})` : ''}${schema.priority ? `, the priority ${q(schema.priority.name)} (${schema.priority.options.map(q).join(', ')})` : ''}${schema.project ? `, the project ${q(schema.project.name)}` : ''}. Read the rest with \`ntn api v1/data_sources/${db.id}\`.`
+        : `Read its properties first with \`ntn api v1/data_sources/${db.id}\`.`,
+      `- Create a task: ntn api v1/pages -d '{ "parent": { "data_source_id": "${db.id}" }, "properties": { ${props.join(', ') || '…'} }, "children": [{ "paragraph": { "rich_text": [{ "text": { "content": "<what's wrong or wanted, and how to reproduce it>" } }] } }] }'`,
+      `- Find tasks: ntn api v1/data_sources/${db.id}/query -d '{ "filter": { … }, "page_size": 50 }' (filter on the properties above)`,
+      `- Read one: ntn pages get <page id>, and its content with ntn api v1/pages/<page id>/markdown`,
+      `- Change one (its status, priority, assignee): ntn api v1/pages/<page id> -X PATCH -d '{ "properties": { … } }'`,
+      `- Comment on one: ntn api v1/comments -d '{ "parent": { "page_id": "<page id>" }, "rich_text": [{ "text": { "content": "…" } }] }'`,
+      `Give the link of every task you create or change (its "url").`,
+    ].join('\n');
+  }
+
   /** A floor's board: the tasks linked to its project, or every task when it has none. */
   view(project?: NotionRef): NotionState {
     const items = project ? this.tasks.items.filter((t) => inProject(t, project.id)) : this.tasks.items;
-    return { ...this.tasks, items, database: this.database, project, me: this.me?.name };
+    const status = this.database && this.schema?.database === this.database.id ? this.schema.schema.status : undefined;
+    const statuses = status ? [...status.stages].map(([name, stage]) => ({ name, stage })) : undefined;
+    return { ...this.tasks, items, database: this.database, project, me: this.me?.name, ...(statuses ? { statuses } : {}) };
   }
 
   async refresh(): Promise<void> {
@@ -210,6 +259,7 @@ export class Notion {
     }
     this.tasks = { ...this.tasks, loading: true };
     this.onChange();
+    const started = Date.now();
     let next: GhState<NotionTask>;
     try {
       const [schema, me] = await Promise.all([this.schemaOf(database.id), this.whoami()]);
@@ -228,17 +278,60 @@ export class Notion {
           : Promise.resolve([]),
       ]);
       const items = [...open, ...finished].map((p) => toTask(p, schema));
-      // Most urgent first; within a priority, the one touched last.
-      items.sort((a, b) => a.priorityRank - b.priorityRank || b.updatedAt.localeCompare(a.updatedAt));
+      items.sort(byUrgency);
       next = { items, fetchedAt: Date.now(), loading: false };
     } catch (err) {
       next = { ...this.tasks, loading: false, error: (err as Error).message, fetchedAt: Date.now() };
     }
     if (gen !== this.generation) return;
+    // A task was moved while this was being read, so it may show the old status: read again.
+    if (this.wroteAt >= started) {
+      this.tasks = { ...this.tasks, loading: false };
+      return this.refresh();
+    }
     this.tasks = next;
     this.onChange();
     // The task windows name the projects; have the list ready before anyone opens one.
     if (!next.error) void this.projects().catch(() => undefined);
+  }
+
+  /**
+   * Sets a task on the board to `status` (an option of the status property), in Notion. The board
+   * shows it moved straight away and goes back if Notion says no; resolves to why not, if it can't be.
+   */
+  async setStatus(id: string, status: string): Promise<string | undefined> {
+    const database = this.database;
+    if (!database) return 'Pick the Notion tasks database first';
+    let schema: TaskSchema;
+    try {
+      schema = await this.schemaOf(database.id);
+    } catch (err) {
+      return `Couldn't read the tasks database: ${(err as Error).message}`;
+    }
+    const prop = schema.status;
+    if (!prop) return 'The tasks database has no status property';
+    const stage = prop.stages.get(status);
+    if (!stage) return `The status has no option "${status}"`;
+    const want = id.replace(/-/g, '');
+    const task = this.tasks.items.find((t) => t.id.replace(/-/g, '') === want);
+    if (!task) return "That task isn't on the board";
+    if (task.status === status) return undefined;
+    const put = (t: NotionTask) => {
+      this.tasks = { ...this.tasks, items: this.tasks.items.map((x) => (x.id === t.id ? t : x)) };
+      this.onChange();
+    };
+    this.wroteAt = Date.now();
+    put({ ...task, status, stage, updatedAt: new Date().toISOString() });
+    try {
+      await api(`v1/pages/${task.id}`, { properties: { [prop.name]: { [prop.type]: { name: status } } } }, 'PATCH');
+    } catch (err) {
+      put(task);
+      return `Notion didn't take the new status: ${(err as Error).message}`;
+    } finally {
+      this.wroteAt = Date.now();
+      this.details.delete(want);
+    }
+    return undefined;
   }
 
   /** Databases that could be the tasks database: the ones with a people property, those with a status too first. */

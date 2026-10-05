@@ -63,3 +63,8 @@
 .nt-comment .md { padding: 4px 0 0 26px; font-size: 14px; }
 .nt-comment .nt-gallery { padding: 6px 0 0 26px; }
 .nt-on { margin: 2px 0 0 26px; font-size: 12px; font-weight: 700; color: var(--muted); font-style: italic; }
+.notion-board .card[draggable='true'] { cursor: grab; }
+.notion-board .card.dragging { opacity: .45; }
+.notion-board .column.drop { outline: 3px dashed var(--ink); outline-offset: -3px; background: rgba(255, 227, 214, .55); }
+.nt-status-pill { padding: 0; }
+.nt-status-pill .nt-status { border: 0; background: transparent; color: inherit; font: inherit; font-weight: 900; padding: 2px 6px; cursor: pointer; }

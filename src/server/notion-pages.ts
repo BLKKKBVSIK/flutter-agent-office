@@ -90,6 +90,19 @@ export function chipOf(v: any): NotionChip | undefined {
   return { name: String(opt.name), ...(COLORS.has(color) ? { color: color as NotionColor } : {}) };
 }
 
+/** Severities by name, worst first: French and English, and S1…/P0… scales. */
+const SEVERITY_TIERS = [/bloq|block|critiq|critical|urgen|fatal|^\W*[sp][01]\b/i, /majeur|major|grave|high|haut|[ée]lev|important|s[ée]v[èe]re|^\W*[sp]2\b/i, /moyen|medium|normal|mod[ée]r|^\W*[sp]3\b/i, /mineur|minor|low|bas|faible|cosm|trivial|^\W*[sp][4-9]\b/i];
+/** For a name it can't place, Notion's color says it: red is the worst. */
+const SEVERITY_COLORS: Partial<Record<NotionColor, number>> = { red: 0, orange: 1, yellow: 2, green: 3, blue: 3, gray: 3 };
+
+/** How bad a severity is, 0 worst; 4 when neither its name nor its color says, 5 when there's none. */
+export function severityRank(sev?: NotionChip): number {
+  if (!sev) return 5;
+  if (/non[\s-]?(bloq|block)/i.test(sev.name)) return 3;
+  const tier = SEVERITY_TIERS.findIndex((re) => re.test(sev.name));
+  return tier >= 0 ? tier : (sev.color && SEVERITY_COLORS[sev.color]) ?? 4;
+}
+
 /** A row of the tasks database as the board shows it. */
 export function toTask(page: any, schema: TaskSchema): NotionTask {
   const props = page?.properties ?? {};
@@ -98,6 +111,7 @@ export function toTask(page: any, schema: TaskSchema): NotionTask {
   const priority = schema.priority ? (props[schema.priority.name]?.select?.name as string | undefined) : undefined;
   const uid = schema.ref ? props[schema.ref]?.unique_id : undefined;
   const rank = priority && schema.priority ? schema.priority.options.indexOf(priority) : -1;
+  const severity = schema.severity ? chipOf(props[schema.severity]) : undefined;
   return {
     id: String(page.id),
     ref: uid?.number != null ? (uid.prefix ? `${uid.prefix}-${uid.number}` : `#${uid.number}`) : '',
@@ -108,7 +122,8 @@ export function toTask(page: any, schema: TaskSchema): NotionTask {
     priority: priority || undefined,
     priorityColor: schema.priority ? chipOf(props[schema.priority.name])?.color : undefined,
     assignees: people(props[schema.assignee]?.people),
-    severity: schema.severity ? chipOf(props[schema.severity]) : undefined,
+    severity,
+    severityRank: severityRank(severity),
     kind: schema.kind ? chipOf(props[schema.kind]) : undefined,
     priorityRank: rank >= 0 ? rank : (schema.priority?.options.length ?? 0),
     projects: schema.project ? ((props[schema.project.name]?.relation ?? []) as { id: string }[]).map((r) => String(r.id)) : [],

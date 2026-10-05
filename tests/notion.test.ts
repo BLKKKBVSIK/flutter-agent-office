@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fileKind, inProject, notionRef, pageProps, readSchema, richToMarkdown, toTask, type TaskSchema } from '../src/server/notion.js';
+import { byUrgency, fileKind, inProject, notionRef, pageProps, readSchema, richToMarkdown, toTask, type TaskSchema } from '../src/server/notion.js';
+import { severityRank } from '../src/server/notion-pages.js';
 
 // Shaped like the properties of a Notion tasks database, as /v1/data_sources/:id returns them.
 const PROPERTIES = {
@@ -83,6 +84,7 @@ test('a page becomes a task: its id, status stage, priority rank, projects and t
     priorityColor: 'orange',
     assignees: [{ name: 'Enzo Conty', avatar: 'https://x/e.png' }, { name: 'Jocelyn Girard', avatar: undefined }],
     severity: { name: 'Majeur', color: 'orange' },
+    severityRank: 1,
     kind: { name: 'Bug', color: 'red' },
     priorityRank: 1,
     projects: ['3e1c0b44-6df2-8057-8d46-d2117f58a26a'],
@@ -167,4 +169,19 @@ test('comment text keeps its bold, links and code, with the markers around the w
     '**Et bien on inverse alors je pense** \n\nvoir [la maquette](https://figma.com/x) et `site_id`',
   );
   assert.equal(richToMarkdown(undefined), '');
+});
+
+test('severities rank by name, worst first, then by their color, and a task without one goes last', () => {
+  const names = ['Mineur', 'Bloquant', 'Moyen', 'Majeur', 'Non bloquant', 'Critical', 'S2', 'P0'];
+  assert.deepEqual(names.map((name) => severityRank({ name })), [3, 0, 2, 1, 3, 0, 1, 0]);
+  assert.equal(severityRank({ name: 'Aïe', color: 'red' }), 0);
+  assert.equal(severityRank({ name: 'Bof', color: 'yellow' }), 2);
+  assert.equal(severityRank({ name: 'Bof', color: 'purple' }), 4);
+  assert.equal(severityRank(undefined), 5);
+});
+
+test('the board puts the worst severity first, then the priority, then the latest edit', () => {
+  const task = (id: string, severityRank: number, priorityRank: number, updatedAt: string) => ({ ...toTask({ id, properties: {} }, schema()), severityRank, priorityRank, updatedAt });
+  const items = [task('minor-urgent', 3, 0, '2026-10-01'), task('none', 5, 0, '2026-10-03'), task('blocker-old', 0, 2, '2026-09-01'), task('blocker-new', 0, 2, '2026-10-02'), task('major', 1, 1, '2026-10-01')];
+  assert.deepEqual(items.sort(byUrgency).map((t) => t.id), ['blocker-new', 'blocker-old', 'major', 'minor-urgent', 'none']);
 });

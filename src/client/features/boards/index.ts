@@ -1,17 +1,14 @@
 /**
- * The boards on the walls: the issues board (less the cards someone's carrying around), the PR board,
+ * The boards on the walls: the 🗂️ Notion board where the issues board was, the PR board,
  * the services board, the task queue, the machine monitor and the meeting room's two. What E does at
  * each is defined with it.
  */
 import type * as THREE from 'three';
-import type { GhIssue } from '../../../shared/protocol';
-import type { Ctx } from '../../core/context';
-import { aside, boardHint, hintTitle, key, onE } from '../../core/hint';
+import type { Ctx, Hint } from '../../core/context';
+import { boardHint, hintTitle, key, onE } from '../../core/hint';
 import { store, type Topic } from '../../state';
 import { openBoard } from '../../ui/boards';
 import type { BoardActions } from '../../ui/github/prompts';
-import { clip } from '../../ui/dom';
-import { openIssue } from '../../ui/pull';
 import { openServices } from '../../ui/services';
 import { BoardTexture, QueueBoardTexture, ServicesBoardTexture } from './world';
 import { MachineTexture } from './machine';
@@ -28,11 +25,17 @@ declare module '../../world/types' {
   }
 }
 
+/** The board that hangs where the issues board was: the 🗂️ Notion board (features/notion). */
+export interface IssuesBoard {
+  texture: THREE.Texture;
+  render(): void;
+  hint(): Hint;
+  open(): void;
+}
+
 export interface BoardsDeps {
-  /** The note on the issues board you're pointing at, if any (see aimedNote in input/pointer.ts). */
-  aimedNote(): GhIssue | null;
-  /** Takes an issue's card off the board, into your hands (see features/carrying). */
-  pickUp(it: GhIssue): void;
+  /** What hangs where the issues board was. */
+  issuesBoard: IssuesBoard;
   /** What a board's buttons do: hand an issue to a worker, call a meeting about it… */
   boardActions(): BoardActions;
   /** The task queue's window. */
@@ -54,32 +57,13 @@ export function installBoards(ctx: Ctx, deps: BoardsDeps) {
     mat.map = texture;
     mat.needsUpdate = true;
   }
-  /** Issues whose cards someone on this floor is carrying around, so they're missing from the board. */
-  function offBoard(): Set<number> {
-    const off = new Set<number>();
-    const carrying = ctx.carrying();
-    if (carrying) off.add(carrying.issue);
-    for (const p of store.peers.values()) if (p.carrying && p.id !== store.you && store.onMyFloor(p)) off.add(p.carrying.issue);
-    return off;
-  }
+  // The 🗂️ Notion board hangs where the issues board was. The issues board's own notes are never drawn,
+  // so there's no GitHub card to point at or take off it (see aimedNote in input/pointer.ts); an
+  // issue's card still comes from its window (✋ Pick it up), and nothing on the wall changes when it does.
   const issuesTex = new BoardTexture('issues');
-  const renderIssuesBoard = () => {
-    const off = offBoard();
-    issuesTex.render(off.size ? { ...store.issues, items: store.issues.items.filter((i) => !off.has(i.number)) } : store.issues);
-  };
-  mountBoard(office.boardMeshes.issues, issuesTex.texture, renderIssuesBoard, ['issues']);
-  let carriedOff = '';
-  store.on('peers', () => {
-    const k = [...offBoard()].join(',');
-    if (k === carriedOff) return;
-    carriedOff = k;
-    renderIssuesBoard();
-  });
-  /** Your card came off the board or went back on it (see features/carrying). */
-  function cardMoved() {
-    carriedOff = [...offBoard()].join(',');
-    renderIssuesBoard();
-  }
+  mountBoard(office.boardMeshes.issues, deps.issuesBoard.texture, deps.issuesBoard.render, ['notion']);
+  /** Your card came off the board or went back on it (see features/carrying): not this one's. */
+  function cardMoved() {}
   const pullsTex = new BoardTexture('pulls');
   const renderPullsBoard = () => pullsTex.render(store.pulls, store.workers);
   mountBoard(office.boardMeshes.pulls, pullsTex.texture, renderPullsBoard, ['pulls']);
@@ -99,17 +83,8 @@ export function installBoards(ctx: Ctx, deps: BoardsDeps) {
   mountBoard(office.boardMeshes.queue, queueTex.texture, renderQueueBoard, ['queue', 'workers']);
   ctx.interactions.define('issues', {
     reach: 9,
-    hint: () => {
-      const aimedNote = deps.aimedNote();
-      if (aimedNote) return { k: String(aimedNote.number), parts: [hintTitle(clip(`📌 #${aimedNote.number} ${aimedNote.title}`, 60)), key('E', 'Take it'), key('O', 'Read it')] };
-      return issuesTex.hasNotes ? { k: 'notes', parts: [hintTitle('📌 Issues board'), key('E', 'Open'), aside('or point at a note to take it')] } : boardHint('📌 Issues board');
-    },
-    use: (_it, key, note) => {
-      // A note on the issues board: E takes it straight off the cork, O opens it to read first.
-      if (note && key === 'E') return deps.pickUp(note);
-      if (note && key === 'O') return openIssue(note, ctx.net, deps.boardActions());
-      if (key === 'E') openBoard('issues', ctx.net, deps.boardActions());
-    },
+    hint: () => deps.issuesBoard.hint(),
+    use: onE(() => deps.issuesBoard.open()),
   });
   ctx.interactions.define('pulls', {
     reach: 9,
@@ -139,7 +114,7 @@ export function installBoards(ctx: Ctx, deps: BoardsDeps) {
   mountBoard(office.meetingSign, meetingSignTex.texture, () => meetingSignTex.render(store.meeting), ['meeting']);
   /** Puts every board's texture up on `w`'s boards. */
   function dressBoards(w: World) {
-    showOn(w.boardMeshes.issues, issuesTex.texture);
+    showOn(w.boardMeshes.issues, deps.issuesBoard.texture);
     showOn(w.boardMeshes.pulls, pullsTex.texture);
     showOn(w.boardMeshes.services, servicesTex.texture);
     showOn(w.boardMeshes.queue, queueTex.texture);

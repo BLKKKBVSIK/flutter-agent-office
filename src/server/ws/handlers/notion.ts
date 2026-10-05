@@ -2,6 +2,7 @@
 // project each floor's board shows.
 import type { NotionClientMsg } from '../../../shared/protocol.js';
 import { notionId, notionRef } from '../../notion.js';
+import { str } from '../../office/input.js';
 import { here } from './common.js';
 import type { HandlerMap, ViewPieces } from './types.js';
 
@@ -42,5 +43,19 @@ export const notionHandlers = {
     ctx.toFloor(floor, { t: 'notion.tasks', state: ctx.notion.view(project) });
     ctx.floorsChanged();
     ctx.toastFloor(floor, project ? `🗂️ ${who} set this floor's Notion board to ${project.name}` : `🗂️ ${who} set this floor's Notion board to every task`);
+  },
+  'notion.status'(ctx, c, msg) {
+    const who = c.peer.name;
+    const floor = here(ctx, c);
+    const id = notionId(msg.id);
+    const status = str(msg.status, 200);
+    if (!floor || !id || !status) return;
+    const task = ctx.notion.tasks.items.find((t) => t.id.replace(/-/g, '') === id.replace(/-/g, ''));
+    void ctx.notion.setStatus(id, status).then((error) => {
+      if (error) return ctx.warn(c, error);
+      if (!task || task.status === status) return;
+      console.log(`  ${who} set Notion task ${task.ref || task.id} to ${status}`);
+      ctx.toastFloor(floor, `🗂️ ${who} moved ${task.ref || `“${task.title}”`} to ${status}`);
+    });
   },
 } satisfies HandlerMap<NotionClientMsg>;

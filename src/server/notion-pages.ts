@@ -37,6 +37,8 @@ export interface TaskSchema {
   kind?: string;
 }
 
+const STATUS_RE = /statu|état|etat|state|stage/i;
+const PRIORITY_RE = /priorit/i;
 const SEVERITY_RE = /s[ée]v[ée]rit|severity|gravit/i;
 const KIND_RE = /(^|[^\p{L}])type$/iu;
 
@@ -51,7 +53,8 @@ export function readSchema(properties: Record<string, any>): TaskSchema | string
   if (!title) return "That database has no title property, so it can't be the tasks database";
   if (!people) return 'That database has no people property to assign tasks in';
   const schema: TaskSchema = { title: title[0], assignee: people[0] };
-  const status = named('status') ?? named('select', /statu|état|etat|state|stage/i);
+  // A priority can be a status property too, so the status is looked for by its name first.
+  const status = named('status', STATUS_RE) ?? entries.find(([k, v]) => v?.type === 'status' && !PRIORITY_RE.test(k)) ?? named('select', STATUS_RE);
   if (status) {
     const [name, v] = status;
     const stages = new Map<string, Stage>();
@@ -65,8 +68,8 @@ export function readSchema(properties: Record<string, any>): TaskSchema | string
     } else for (const o of (v.select?.options ?? []) as { name: string }[]) stages.set(o.name, stageOfName(o.name));
     schema.status = { name, type: v.type, stages };
   }
-  const priority = named('select', /priorit/i);
-  if (priority) schema.priority = { name: priority[0], options: ((priority[1].select?.options ?? []) as { name: string }[]).map((o) => o.name) };
+  const priority = named('select', PRIORITY_RE) ?? named('status', PRIORITY_RE);
+  if (priority && priority[0] !== schema.status?.name) schema.priority = { name: priority[0], options: (((priority[1].select ?? priority[1].status)?.options ?? []) as { name: string }[]).map((o) => o.name) };
   const project = named('relation', /proje/i);
   if (project?.[1].relation?.data_source_id) schema.project = { name: project[0], dataSource: String(project[1].relation.data_source_id) };
   const tickets = named('relation', /ticket/i);
@@ -108,7 +111,8 @@ export function toTask(page: any, schema: TaskSchema): NotionTask {
   const props = page?.properties ?? {};
   const st = schema.status ? props[schema.status.name] : undefined;
   const status = String((st?.status ?? st?.select)?.name ?? '');
-  const priority = schema.priority ? (props[schema.priority.name]?.select?.name as string | undefined) : undefined;
+  const pr = schema.priority ? props[schema.priority.name] : undefined;
+  const priority = (pr?.select ?? pr?.status)?.name as string | undefined;
   const uid = schema.ref ? props[schema.ref]?.unique_id : undefined;
   const rank = priority && schema.priority ? schema.priority.options.indexOf(priority) : -1;
   const severity = schema.severity ? chipOf(props[schema.severity]) : undefined;

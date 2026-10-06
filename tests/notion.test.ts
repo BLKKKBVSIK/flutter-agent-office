@@ -185,3 +185,19 @@ test('the board puts the worst severity first, then the priority, then the lates
   const items = [task('minor-urgent', 3, 0, '2026-10-01'), task('none', 5, 0, '2026-10-03'), task('blocker-old', 0, 2, '2026-09-01'), task('blocker-new', 0, 2, '2026-10-02'), task('major', 1, 1, '2026-10-01')];
   assert.deepEqual(items.sort(byUrgency).map((t) => t.id), ['blocker-new', 'blocker-old', 'major', 'minor-urgent', 'none']);
 });
+
+test('a priority that is a status property is not taken for the status, even listed first', () => {
+  const { État, ...rest } = PROPERTIES;
+  const priority = {
+    type: 'status',
+    status: { options: [{ id: 'u', name: '1. Urgent' }, { id: 'p', name: '2. Prioritaire' }], groups: [{ name: 'To-do', option_ids: ['u', 'p'] }, { name: 'In progress', option_ids: [] }, { name: 'Complete', option_ids: [] }] },
+  };
+  const s = readSchema({ ...rest, Priorité: priority, État }) as TaskSchema;
+  assert.equal(s.status?.name, 'État');
+  assert.deepEqual(s.priority, { name: 'Priorité', options: ['1. Urgent', '2. Prioritaire'] });
+  const t = toTask({ id: 'p', properties: { État: { status: { name: 'À valider' } }, Priorité: { type: 'status', status: { name: '2. Prioritaire', color: 'orange' } } } }, s);
+  assert.equal(t.stage, 'doing');
+  assert.equal(t.priority, '2. Prioritaire');
+  assert.equal(t.priorityRank, 1);
+  assert.equal(t.priorityColor, 'orange');
+});

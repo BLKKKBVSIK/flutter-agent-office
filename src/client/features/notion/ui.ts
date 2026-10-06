@@ -8,7 +8,7 @@ import type { BoardActions } from '../../ui/github/prompts';
 import { markdown } from '../../ui/markdown';
 import { providerPicker } from '../../ui/provider';
 import { fromNotion } from './markdown';
-import { draggableNote, dropColumn, statusPicker } from './status';
+import { boardColumns, draggableNote, dropColumn, statusPicker } from './status';
 
 // The 🗂️ Notion board: the tasks assigned to the office's `ntn` login, in the tasks database the
 // building reads (picked here the first time), narrowed to the floor's Notion project if it has one.
@@ -124,20 +124,6 @@ export function notionProjectPicker(net: Net, initial: NotionRef | undefined, on
   return { el, value: () => current, destroy: off };
 }
 
-interface Column {
-  stage: NotionTask['stage'];
-  title: string;
-  items: NotionTask[];
-}
-
-function columns(items: NotionTask[]): Column[] {
-  return [
-    { stage: 'todo', title: '📥 To do', items: items.filter((t) => t.stage === 'todo') },
-    { stage: 'doing', title: '🚧 In progress', items: items.filter((t) => t.stage === 'doing') },
-    { stage: 'done', title: '✅ Done', items: items.filter((t) => t.stage === 'done').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) },
-  ];
-}
-
 /** Whether a task is already on the 📋 queue (it's there by its title, having no issue number). */
 function queued(t: NotionTask) {
   return store.queue.tasks.find((q) => q.status !== 'done' && q.title === taskTitle(t));
@@ -231,7 +217,7 @@ export function openNotionBoard(net: Net, actions: BoardActions) {
       body.append(h('div.board-error', {}, `Couldn't load from Notion: ${st.error}`, h('br'), h('small', {}, 'The server runs `ntn` (the Notion CLI) — make sure it is installed and logged in (ntn login).')));
       return;
     }
-    for (const col of columns(st.items)) {
+    for (const col of boardColumns(st.items)) {
       const ul = h('ul');
       col.items.forEach((t, i) => {
         const q = queued(t);
@@ -263,7 +249,7 @@ export function openNotionBoard(net: Net, actions: BoardActions) {
       });
       if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
       const section = h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul);
-      dropColumn(net, section, col.stage);
+      dropColumn(net, section, col);
       body.append(section);
     }
     body.querySelectorAll('.column > ul').forEach((ul, i) => (ul.scrollTop = scrolled[i] ?? 0));
